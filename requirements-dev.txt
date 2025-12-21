@@ -1,0 +1,1 @@
+#DevelopmentdependenciesforQuartz#Installwith:pipinstall-rrequirements-dev.txt#Includeproductiondependencies-rrequirements.txt#Testingpytest>=7.4.0pytest-qt>=4.2.0pytest-cov>=4.1.0#CodeQualityruff>=0.1.0mypy>=1.5.0#PackagingPyInstaller>=5.13.0
