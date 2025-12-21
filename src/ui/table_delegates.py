@@ -1,0 +1,350 @@
+"""Custom table cell editors for different field types"""
+
+from typing import Any, Optional
+
+from PySide6.QtWidgets import (
+    QStyledItemDelegate, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
+    QComboBox, QDateEdit, QDateTimeEdit, QWidget, QStyleOptionButton, QApplication, QStyle
+)
+from PySide6.QtCore import Qt, QModelIndex, QDate, QDateTime, QAbstractItemModel, QEvent
+from PySide6.QtGui import QColor, QPainter
+
+
+class FieldTypeDelegate(QStyledItemDelegate):
+    """Base delegate for field-type-specific editors"""
+    
+    def __init__(self, field: dict, parent=None):
+        super().__init__(parent)
+        self.field = field
+        self.field_type = field.get("type", "text")
+    
+    def createEditor(self, parent: QWidget, option, index: QModelIndex) -> QWidget:
+        """Create appropriate editor based on field type"""
+        # For checkboxes, don't create an editor - handle clicks directly via editorEvent
+        if self.field_type == "checkbox":
+            return None
+        
+        # Ensure editor is positioned correctly within the cell
+        editor = None
+        if self.field_type == "integer":
+            # Use QLineEdit with number validation instead of QSpinBox (no arrows)
+            editor = QLineEdit(parent)
+            # Set input method hints for numeric keyboard on mobile
+            editor.setInputMethodHints(Qt.InputMethodHint.ImhDigitsOnly)
+            # Add validator for integers
+            from PySide6.QtGui import QIntValidator
+            validator = QIntValidator()
+            editor.setValidator(validator)
+        elif self.field_type == "decimal":
+            # Use QLineEdit with number validation instead of QDoubleSpinBox (no arrows)
+            editor = QLineEdit(parent)
+            editor.setInputMethodHints(Qt.InputMethodHint.ImhFormattedNumbersOnly)
+            # Add validator for decimals
+            from PySide6.QtGui import QDoubleValidator
+            validator = QDoubleValidator()
+            validator.setNotation(QDoubleValidator.Notation.StandardNotation)
+            editor.setValidator(validator)
+        
+        elif self.field_type == "date":
+            editor = QDateEdit(parent)
+            editor.setCalendarPopup(True)
+            editor.setDate(QDate.currentDate())
+            # Configure calendar to show full 3-character day abbreviations
+            calendar = editor.calendarWidget()
+            if calendar:
+                calendar.setFirstDayOfWeek(Qt.DayOfWeek.Monday)
+                # Use ShortDayNames format (3-character abbreviations) and ensure header is wide enough
+                calendar.setHorizontalHeaderFormat(QCalendarWidget.HorizontalHeaderFormat.ShortDayNames)
+                # Set minimum section size for horizontal header to show full day names
+                calendar.horizontalHeader().setMinimumSectionSize(45)
+                calendar.horizontalHeader().setDefaultSectionSize(45)
+            return editor
+        
+        elif self.field_type == "datetime":
+            editor = QDateTimeEdit(parent)
+            editor.setCalendarPopup(True)
+            editor.setDateTime(QDateTime.currentDateTime())
+            # Configure calendar to show full 3-character day abbreviations
+            calendar = editor.calendarWidget()
+            if calendar:
+                calendar.setFirstDayOfWeek(Qt.DayOfWeek.Monday)
+                # Use ShortDayNames format (3-character abbreviations) and ensure header is wide enough
+                calendar.setHorizontalHeaderFormat(QCalendarWidget.HorizontalHeaderFormat.ShortDayNames)
+                # Set minimum section size for horizontal header to show full day names
+                calendar.horizontalHeader().setMinimumSectionSize(45)
+                calendar.horizontalHeader().setDefaultSectionSize(45)
+            return editor
+        
+        elif self.field_type in ("select", "single-select"):
+            editor = QComboBox(parent)
+            options = self.field.get("options", [])
+            if isinstance(options, str):
+                import json
+                try:
+                    options = json.loads(options)
+                except:
+                    options = []
+            if isinstance(options, list):
+                editor.addItems([str(opt) for opt in options])
+            editor.setEditable(False)
+            return editor
+        
+        # Default: text editor
+        editor = QLineEdit(parent)
+        
+        # Apply subtle styling to all editors (including numeric fields)
+        if editor and isinstance(editor, (QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QDateEdit, QDateTimeEdit)):
+            # Subtle styling - minimal border, transparent background, matches table
+            editor.setStyleSheet("""
+                QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QDateEdit, QDateTimeEdit {
+                    background-color: rgba(255, 255, 255, 240);
+                    border: 1px solid rgba(156, 39, 176, 0.3);
+                    border-radius: 2px;
+                    padding: 2px 4px;
+                    color: #424242;
+                    selection-background-color: rgba(156, 39, 176, 0.2);
+                    selection-color: #424242;
+                }
+                QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, 
+                QComboBox:focus, QDateEdit:focus, QDateTimeEdit:focus {
+                    border: 1px solid rgba(156, 39, 176, 0.6);
+                    background-color: rgba(255, 255, 255, 255);
+                    color: #424242;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                    width: 16px;
+                }
+                QComboBox::down-arrow {
+                    width: 0;
+                    height: 0;
+                    border-left: 4px solid transparent;
+                    border-right: 4px solid transparent;
+                    border-top: 5px solid rgba(156, 39, 176, 0.7);
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #ffffff;
+                    color: #424242;
+                    selection-background-color: rgba(156, 39, 176, 0.3);
+                    selection-color: #424242;
+                }
+            """)
+        
+        return editor
+    
+    def updateEditorGeometry(self, editor: QWidget, option, index: QModelIndex):
+        """Update editor geometry to match cell exactly - fixes positioning issue"""
+        # Position editor to exactly match the cell bounds with subtle padding
+        rect = option.rect
+        # For text editors (including numeric fields now using QLineEdit), add minimal padding
+        if isinstance(editor, (QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QDateEdit, QDateTimeEdit)):
+            # Adjust geometry to fit within cell with 2px padding on all sides
+            # This makes it less aggressive and more subtle
+            editor.setGeometry(rect.adjusted(2, 1, -2, -1))
+        else:
+            # For checkboxes and other widgets, use exact cell bounds
+            editor.setGeometry(rect)
+    
+    def setEditorData(self, editor: QWidget, index: QModelIndex):
+        """Set editor value from model"""
+        value = index.model().data(index, Qt.EditRole)
+        
+        if isinstance(editor, QLineEdit):
+            # For numeric fields, display the value as-is
+            if self.field_type == "integer":
+                # Display integer value
+                try:
+                    editor.setText(str(int(value)) if value else "")
+                except (ValueError, TypeError):
+                    editor.setText(str(value) if value else "")
+            elif self.field_type == "decimal":
+                # Display decimal value
+                try:
+                    editor.setText(str(float(value)) if value else "")
+                except (ValueError, TypeError):
+                    editor.setText(str(value) if value else "")
+            else:
+                # Regular text field
+                editor.setText(str(value) if value else "")
+        elif isinstance(editor, QSpinBox):
+            try:
+                editor.setValue(int(value) if value else 0)
+            except (ValueError, TypeError):
+                editor.setValue(0)
+        elif isinstance(editor, QDoubleSpinBox):
+            try:
+                editor.setValue(float(value) if value else 0.0)
+            except (ValueError, TypeError):
+                editor.setValue(0.0)
+        elif isinstance(editor, QCheckBox):
+            if isinstance(value, bool):
+                editor.setChecked(value)
+            elif isinstance(value, str):
+                editor.setChecked(value.lower() in ("true", "1", "yes", "on"))
+            else:
+                editor.setChecked(bool(value))
+        elif isinstance(editor, QDateEdit):
+            if value:
+                try:
+                    from datetime import datetime
+                    if isinstance(value, str):
+                        dt = datetime.fromisoformat(value)
+                    else:
+                        dt = value
+                    editor.setDate(QDate(dt.year, dt.month, dt.day))
+                except:
+                    editor.setDate(QDate.currentDate())
+            else:
+                editor.setDate(QDate.currentDate())
+        elif isinstance(editor, QDateTimeEdit):
+            if value:
+                try:
+                    from datetime import datetime
+                    if isinstance(value, str):
+                        dt = datetime.fromisoformat(value)
+                    else:
+                        dt = value
+                    editor.setDateTime(QDateTime(dt))
+                except:
+                    editor.setDateTime(QDateTime.currentDateTime())
+            else:
+                editor.setDateTime(QDateTime.currentDateTime())
+        elif isinstance(editor, QComboBox):
+            if value:
+                idx = editor.findText(str(value))
+                if idx >= 0:
+                    editor.setCurrentIndex(idx)
+            else:
+                editor.setCurrentIndex(0)
+    
+    def setModelData(self, editor: QWidget, model: QAbstractItemModel, index: QModelIndex):
+        """Set model value from editor"""
+        if isinstance(editor, QLineEdit):
+            text = editor.text().strip()
+            # Validate numeric fields
+            if self.field_type == "integer":
+                # Validate integer
+                try:
+                    value = int(text) if text else ""
+                except ValueError:
+                    # Invalid integer - return empty or keep as text for validation to catch
+                    value = text
+            elif self.field_type == "decimal":
+                # Validate decimal
+                try:
+                    value = float(text) if text else ""
+                except ValueError:
+                    # Invalid decimal - return empty or keep as text for validation to catch
+                    value = text
+            else:
+                # Regular text field
+                value = text
+        elif isinstance(editor, QSpinBox):
+            value = editor.value()
+        elif isinstance(editor, QDoubleSpinBox):
+            value = editor.value()
+        elif isinstance(editor, QCheckBox):
+            value = editor.isChecked()
+        elif isinstance(editor, QDateEdit):
+            date = editor.date()
+            value = date.toString(Qt.DateFormat.ISODate)
+        elif isinstance(editor, QDateTimeEdit):
+            dt = editor.dateTime()
+            value = dt.toString(Qt.DateFormat.ISODate)
+        elif isinstance(editor, QComboBox):
+            value = editor.currentText()
+        else:
+            value = ""
+        
+        model.setData(index, value, Qt.EditRole)
+    
+    def editorEvent(self, event: QEvent, model: QAbstractItemModel, option, index: QModelIndex) -> bool:
+        """Handle editor events - for checkboxes, toggle on click or spacebar"""
+        if self.field_type == "checkbox":
+            # Handle mouse clicks
+            if event.type() == QEvent.Type.MouseButtonPress or event.type() == QEvent.Type.MouseButtonDblClick:
+                # Toggle checkbox value
+                value = model.data(index, Qt.EditRole)
+                checked = False
+                
+                if isinstance(value, bool):
+                    checked = value
+                elif isinstance(value, str):
+                    checked = value.lower() in ("true", "1", "yes", "on")
+                else:
+                    checked = bool(value)
+                
+                # Toggle the value
+                new_value = not checked
+                model.setData(index, new_value, Qt.EditRole)
+                return True
+        
+        return super().editorEvent(event, model, option, index)
+    
+    def paint(self, painter: QPainter, option, index: QModelIndex):
+        """Custom paint for checkbox fields"""
+        if self.field_type == "checkbox":
+            value = index.model().data(index, Qt.DisplayRole)
+            checked = False
+            
+            if isinstance(value, bool):
+                checked = value
+            elif isinstance(value, str):
+                checked = value.lower() in ("true", "1", "yes", "on")
+            else:
+                checked = bool(value)
+            
+            # Draw checkbox
+            checkbox_rect = option.rect
+            checkbox_rect.setWidth(20)
+            checkbox_rect.moveLeft(option.rect.left() + (option.rect.width() - 20) // 2)
+            
+            checkbox_option = QStyleOptionButton()
+            checkbox_option.rect = checkbox_rect
+            checkbox_option.state = QStyle.StateFlag.State_Enabled
+            if checked:
+                checkbox_option.state |= QStyle.StateFlag.State_On
+            else:
+                checkbox_option.state |= QStyle.StateFlag.State_Off
+            
+            QApplication.style().drawControl(QStyle.ControlElement.CE_CheckBox, checkbox_option, painter)
+        else:
+            # Default painting for other types
+            super().paint(painter, option, index)
+
+
+class ValidationErrorDelegate(QStyledItemDelegate):
+    """Delegate that highlights validation errors"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.error_cells = {}  # {(row, col): error_message}
+    
+    def set_error(self, row: int, col: int, message: str):
+        """Mark a cell as having an error"""
+        self.error_cells[(row, col)] = message
+    
+    def clear_error(self, row: int, col: int):
+        """Clear error for a cell"""
+        self.error_cells.pop((row, col), None)
+    
+    def clear_all_errors(self):
+        """Clear all errors"""
+        self.error_cells.clear()
+    
+    def paint(self, painter: QPainter, option, index: QModelIndex):
+        """Paint with error highlighting"""
+        # Check if this cell has an error
+        row = index.row()
+        col = index.column()
+        
+        if (row, col) in self.error_cells:
+            # Draw red border
+            painter.save()
+            painter.setPen(QColor(255, 0, 0, 200))
+            painter.setBrush(QColor(255, 240, 240, 100))
+            painter.drawRect(option.rect)
+            painter.restore()
+        
+        # Call parent paint
+        super().paint(painter, option, index)
