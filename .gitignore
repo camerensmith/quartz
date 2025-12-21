@@ -49,3 +49,13 @@ quartz_config.json
 # Keep icon file
 !quartz.png
 
+# Ignore text, CSV, and markdown files in root (except README.md)
+*.txt
+*.csv
+*.md
+!README.md
+
+# Ignore PowerShell and batch scripts
+*.ps1
+*.bat
+
