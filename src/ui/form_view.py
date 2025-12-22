@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QApplication,
 )
 from PySide6.QtCore import Qt, Signal, QPoint, QEvent
 
@@ -320,10 +321,21 @@ class FormView(QWidget):
         if not self.store or self._readonly:
             return
         
+        # Stop any pending auto-save timer immediately
+        if self.save_timer:
+            self.save_timer.stop()
+            self.save_timer = None
+        
         # Save the current record first
         # Temporarily disable auto-save to prevent double-saving
         was_loading = self.loading_record
         self.loading_record = True
+        
+        # Clear focus from currently focused widget to ensure any pending edits are committed
+        # Widget values are read directly, so no need to process events
+        focused_widget = QApplication.focusWidget()
+        if focused_widget:
+            focused_widget.clearFocus()
         
         # Collect data and validate
         data = {}
@@ -371,18 +383,8 @@ class FormView(QWidget):
         # Now create a new empty form
         self.new_record()
         
-        # Delay focus slightly to ensure save is fully committed
-        # Use QTimer to focus after a short delay
-        from PySide6.QtCore import QTimer
-        def focus_first_field():
-            if self.field_widgets:
-                first_field_key = self.fields[0]["key"] if self.fields else None
-                if first_field_key and first_field_key in self.field_widgets:
-                    first_widget = self.field_widgets[first_field_key]
-                    first_widget.setFocus()
-        
-        # Delay focus by 100ms to ensure save completes
-        QTimer.singleShot(100, focus_first_field)
+        # Don't auto-focus - let user continue working where they were
+        # The save is committed, form is cleared, ready for next entry
 
     def _show_validation_errors(self, errors: Dict[str, str]):
         """Display validation errors under fields"""

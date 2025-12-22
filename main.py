@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from src.ui.main_window import MainWindow
 from src.core.config import Config
+from src.core.version import VERSION
 
 
 def main():
@@ -14,6 +15,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName('Quartz')
     app.setOrganizationName('Quartz')
+    app.setApplicationVersion(VERSION)
     from src.core.resource_path import get_quartz_icon_path
     icon_path = get_quartz_icon_path()
     if icon_path.exists():

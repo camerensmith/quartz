@@ -26,10 +26,13 @@ from src.core.config import Config
 from src.core.workspace import Workspace
 from src.core.collection_store import CollectionStore
 from src.core.resource_path import asset_path, get_quartz_icon_path
+from src.core.version import VERSION
+from src.core.update_checker import UpdateChecker
 from src.ui.table_view import TableView
 from src.ui.form_view import FormView
 from src.ui.styles import AppStyles
 from src.ui.advanced_search_dialog import AdvancedSearchDialog
+from src.ui.update_dialog import UpdateDialog
 
 
 class CollectionsListWidget(QListWidget):
@@ -83,6 +86,9 @@ class MainWindow(QMainWindow):
         self.undo_history: list = []  # List of commands that can be undone
         self.redo_history: list = []  # List of commands that can be redone
         self.max_history = 50  # Maximum number of undo/redo steps
+        
+        # Update check threads (for proper lifecycle management)
+        self.update_check_threads: list = []  # Keep references to prevent garbage collection
 
         # Set window icon
         from PySide6.QtGui import QIcon
@@ -91,12 +97,21 @@ class MainWindow(QMainWindow):
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
 
+        # Set window title with version
+        self.setWindowTitle(f"Quartz v{VERSION}")
+
         self._apply_theme()
         self._init_ui()
         self._load_collections()
         
         # Apply initial view settings
         self._apply_view_settings()
+        
+        # Check for updates on startup if enabled
+        if self.config.get("auto_check_for_updates", False):
+            from PySide6.QtCore import QTimer
+            # Delay check slightly to let UI finish loading
+            QTimer.singleShot(2000, self._check_for_updates_async)
 
     def _apply_theme(self):
         """Apply theme stylesheet"""
@@ -342,7 +357,19 @@ class MainWindow(QMainWindow):
         self._create_menu_bar()
 
         # Status bar
-        self.statusBar().showMessage("Ready")
+        status_bar = self.statusBar()
+        status_bar.showMessage("Ready")
+        
+        # Add version label to status bar (right side)
+        version_label = QLabel(f"v{VERSION}")
+        version_label.setStyleSheet("""
+            QLabel {
+                color: rgba(255, 255, 255, 0.7);
+                font-size: 11px;
+                padding: 0px 8px;
+            }
+        """)
+        status_bar.addPermanentWidget(version_label)
 
     def _create_toolbar(self, parent_layout):
         """Create main toolbar"""
@@ -613,6 +640,12 @@ class MainWindow(QMainWindow):
         preferences_action = QAction("Preferences...", self)
         preferences_action.triggered.connect(self._show_settings)
         tools_menu.addAction(preferences_action)
+        
+        tools_menu.addSeparator()
+        
+        check_update_action = QAction("Check for Updates...", self)
+        check_update_action.triggered.connect(self._manual_check_for_updates)
+        tools_menu.addAction(check_update_action)
         
         # Placeholder action for Ctrl+F (currently does nothing)
         placeholder_action = QAction("Search (Placeholder)", self)
@@ -2429,6 +2462,127 @@ class MainWindow(QMainWindow):
         dialog = ShortcutsDialog(self)
         dialog.exec()
 
+    def _manual_check_for_updates(self):
+        """Manually check for updates from Tools menu"""
+        from PySide6.QtWidgets import QMessageBox
+        from PySide6.QtCore import QThread, Signal
+        
+        # Show checking message
+        checking_msg = QMessageBox(self)
+        checking_msg.setWindowTitle("Checking for Updates")
+        checking_msg.setText("Checking for updates...")
+        checking_msg.setStandardButtons(QMessageBox.NoButton)
+        checking_msg.show()
+        
+        # Check in background thread
+        class UpdateCheckThread(QThread):
+            update_available = Signal(dict)
+            no_update = Signal()
+            error = Signal(str)
+            
+            def run(self):
+                try:
+                    update_info = UpdateChecker.check_for_updates()
+                    if update_info:
+                        self.update_available.emit(update_info)
+                    else:
+                        self.no_update.emit()
+                except Exception as e:
+                    self.error.emit(str(e))
+        
+        def on_update_available(update_info):
+            checking_msg.close()
+            self._show_update_dialog(update_info)
+        
+        def on_no_update():
+            checking_msg.close()
+            QMessageBox.information(
+                self,
+                "No Updates",
+                f"You are running the latest version (v{VERSION})."
+            )
+        
+        def on_error(error_msg):
+            checking_msg.close()
+            QMessageBox.warning(
+                self,
+                "Update Check Failed",
+                f"Could not check for updates:\n{error_msg}"
+            )
+        
+        thread = UpdateCheckThread()
+        thread.update_available.connect(on_update_available)
+        thread.no_update.connect(on_no_update)
+        thread.error.connect(on_error)
+        thread.start()
+    
+    def _check_for_updates_async(self):
+        """Check for updates asynchronously on startup (if enabled)"""
+        from PySide6.QtCore import QThread, Signal
+        
+        class UpdateCheckThread(QThread):
+            update_available = Signal(dict)
+            
+            def run(self):
+                try:
+                    update_info = UpdateChecker.check_for_updates()
+                    if update_info:
+                        self.update_available.emit(update_info)
+                except Exception:
+                    pass  # Silently fail on startup check
+        
+        def on_update_available(update_info):
+            # Check if this version was ignored
+            ignored_versions = self.config.get("update_ignored_versions", [])
+            if update_info['version'] not in ignored_versions:
+                self._show_update_dialog(update_info)
+            # Clean up thread reference
+            if thread in self.update_check_threads:
+                self.update_check_threads.remove(thread)
+            thread.deleteLater()
+        
+        thread = UpdateCheckThread()
+        self.update_check_threads.append(thread)  # Keep reference
+        thread.update_available.connect(on_update_available)
+        thread.finished.connect(lambda: thread.deleteLater())  # Clean up when done
+        thread.start()
+    
+    def _show_update_dialog(self, update_info: dict):
+        """Show update dialog and handle user response"""
+        dialog = UpdateDialog(update_info, self)
+        if dialog.exec():
+            # User chose to download
+            self._open_download_url(update_info)
+        elif dialog.ignored:
+            # User chose to ignore this version
+            ignored_versions = self.config.get("update_ignored_versions", [])
+            if update_info['version'] not in ignored_versions:
+                ignored_versions.append(update_info['version'])
+                self.config.set("update_ignored_versions", ignored_versions)
+    
+    def _open_download_url(self, update_info: dict):
+        """Open the download URL in the default browser"""
+        import webbrowser
+        download_url = update_info.get('download_url')
+        release_url = update_info.get('url')
+        
+        # Prefer direct download URL, fallback to release page
+        url = download_url if download_url else release_url
+        if url:
+            webbrowser.open(url)
+            QMessageBox.information(
+                self,
+                "Download Started",
+                "The update download page has been opened in your browser.\n\n"
+                "After downloading, close Quartz and run the installer to update."
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                "Download Error",
+                "Could not find download URL for this update."
+            )
+
     def _show_settings(self):
         """Show settings/preferences window"""
         from src.ui.preferences_dialog import PreferencesDialog
@@ -2873,6 +3027,14 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close"""
+        # Wait for any running update check threads to finish
+        for thread in self.update_check_threads[:]:  # Copy list to avoid modification during iteration
+            if thread.isRunning():
+                thread.wait(1000)  # Wait up to 1 second for thread to finish
+            if thread in self.update_check_threads:
+                self.update_check_threads.remove(thread)
+            thread.deleteLater()
+        
         if self.current_store:
             self.current_store.close()
         event.accept()

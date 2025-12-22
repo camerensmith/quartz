@@ -113,6 +113,9 @@ class PreferencesDialog(QDialog):
         self.backup_check = QCheckBox("Enable automatic backups")
         data_layout.addWidget(self.backup_check)
         
+        self.auto_check_updates_check = QCheckBox("Auto-check for updates")
+        data_layout.addWidget(self.auto_check_updates_check)
+        
         backup_freq_layout = QHBoxLayout()
         backup_freq_layout.addWidget(QLabel("Backup frequency:"))
         self.backup_freq_combo = QComboBox()
@@ -308,6 +311,7 @@ class PreferencesDialog(QDialog):
         self.workspace_path_input.setText(str(self.config.workspace_path))
         self.autosave_check.setChecked(self.config.get("autosave", True))
         self.backup_check.setChecked(self.config.get("backup_enabled", True))
+        self.auto_check_updates_check.setChecked(self.config.get("auto_check_for_updates", False))
         backup_freq = self.config.get("backup_frequency", "daily")
         self.backup_freq_combo.setCurrentText(backup_freq.capitalize())
         
@@ -356,6 +360,7 @@ class PreferencesDialog(QDialog):
         
         self.config.set("autosave", self.autosave_check.isChecked())
         self.config.set("backup_enabled", self.backup_check.isChecked())
+        self.config.set("auto_check_for_updates", self.auto_check_updates_check.isChecked())
         self.config.set("backup_frequency", self.backup_freq_combo.currentText().lower())
         
         # Appearance

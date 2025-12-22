@@ -54,6 +54,8 @@ class Config:
             "expanded_view": False,
             "date_format": "yyyy-MM-dd",  # Default ISO date format
             "datetime_format": "yyyy-MM-dd HH:mm:ss",  # Default ISO datetime format
+            "auto_check_for_updates": False,  # Auto-check for updates on startup
+            "update_ignored_versions": [],  # List of versions user chose to ignore
         }
     
     def save(self):
