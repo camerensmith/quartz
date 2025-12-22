@@ -2510,10 +2510,12 @@ class MainWindow(QMainWindow):
                 f"Could not check for updates:\n{error_msg}"
             )
         
-        thread = UpdateCheckThread()
+        thread = UpdateCheckThread(self)  # Parent to main window
+        self.update_check_threads.append(thread)  # Keep reference
         thread.update_available.connect(on_update_available)
         thread.no_update.connect(on_no_update)
         thread.error.connect(on_error)
+        thread.finished.connect(lambda: self._cleanup_thread(thread))  # Clean up when done
         thread.start()
     
     def _check_for_updates_async(self):
@@ -2536,16 +2538,18 @@ class MainWindow(QMainWindow):
             ignored_versions = self.config.get("update_ignored_versions", [])
             if update_info['version'] not in ignored_versions:
                 self._show_update_dialog(update_info)
-            # Clean up thread reference
-            if thread in self.update_check_threads:
-                self.update_check_threads.remove(thread)
-            thread.deleteLater()
         
-        thread = UpdateCheckThread()
+        thread = UpdateCheckThread(self)  # Parent to main window
         self.update_check_threads.append(thread)  # Keep reference
         thread.update_available.connect(on_update_available)
-        thread.finished.connect(lambda: thread.deleteLater())  # Clean up when done
+        thread.finished.connect(lambda: self._cleanup_thread(thread))  # Clean up when done
         thread.start()
+    
+    def _cleanup_thread(self, thread):
+        """Clean up a finished update check thread"""
+        if thread in self.update_check_threads:
+            self.update_check_threads.remove(thread)
+        thread.deleteLater()
     
     def _show_update_dialog(self, update_info: dict):
         """Show update dialog and handle user response"""
