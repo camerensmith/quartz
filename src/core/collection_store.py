@@ -32,8 +32,19 @@ class CollectionStore:
     def close(self):
         """Close database connection"""
         if self.conn:
-            self.conn.close()
-            self.conn = None
+            try:
+                # Commit any pending transactions
+                self.conn.commit()
+            except Exception:
+                # If commit fails, rollback
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+            finally:
+                # Close the connection
+                self.conn.close()
+                self.conn = None
     
     def __enter__(self):
         self.connect()
@@ -261,8 +272,22 @@ class CollectionStore:
         
         self.conn.commit()
     
+    def _ensure_schema(self):
+        """Ensure database schema is initialized"""
+        self.connect()
+        cursor = self.conn.cursor()
+        # Check if fields table exists
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='fields'
+        """)
+        if not cursor.fetchone():
+            # Schema not initialized, initialize it now
+            self.initialize_schema(self.key_prefix)
+    
     def list_fields(self) -> List[Dict]:
         """List all fields"""
+        self._ensure_schema()
         self.connect()
         cursor = self.conn.cursor()
         cursor.execute("""
@@ -295,6 +320,7 @@ class CollectionStore:
     
     def add_record(self, data: Dict[str, Any]) -> Union[int, str]:
         """Add a new record - returns ID (int or str depending on prefix)"""
+        self._ensure_schema()
         self.connect()
         cursor = self.conn.cursor()
         now = datetime.now().isoformat()
@@ -355,6 +381,7 @@ class CollectionStore:
     
     def update_record(self, record_id: int, data: Dict[str, Any]):
         """Update an existing record"""
+        self._ensure_schema()
         self.connect()
         cursor = self.conn.cursor()
         now = datetime.now().isoformat()
@@ -382,6 +409,7 @@ class CollectionStore:
     
     def delete_record(self, record_id: Union[int, str]):
         """Delete a record"""
+        self._ensure_schema()
         self.connect()
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM records WHERE id = ?", (record_id,))
@@ -393,6 +421,7 @@ class CollectionStore:
     
     def get_record(self, record_id: Union[int, str]) -> Optional[Dict]:
         """Get a single record"""
+        self._ensure_schema()
         self.connect()
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM records WHERE id = ?", (record_id,))
@@ -403,6 +432,7 @@ class CollectionStore:
     
     def list_records(self, limit: Optional[int] = None, offset: int = 0, order_by: Optional[str] = None) -> List[Dict]:
         """List records with optional ordering"""
+        self._ensure_schema()
         self.connect()
         cursor = self.conn.cursor()
         
@@ -418,6 +448,7 @@ class CollectionStore:
     
     def count_records(self) -> int:
         """Count total records"""
+        self._ensure_schema()
         self.connect()
         cursor = self.conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM records")

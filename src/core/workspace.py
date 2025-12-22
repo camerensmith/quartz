@@ -120,7 +120,7 @@ class Workspace:
         """Get collection info by name"""
         return self.collections.get(name)
     
-    def create_collection(self, name: str) -> Path:
+    def create_collection(self, name: str, key_prefix: Optional[str] = None) -> Path:
         """Create a new collection"""
         if name in self.collections:
             raise ValueError(f"Collection '{name}' already exists")
@@ -282,8 +282,26 @@ class Workspace:
         # Remove files
         if collection_dir.exists():
             shutil.rmtree(collection_dir)
+        
+        # Try to delete database file with retry (Windows file locking issue)
         if db_path.exists():
-            db_path.unlink()
+            import time
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    db_path.unlink()
+                    break
+                except PermissionError:
+                    if attempt < max_retries - 1:
+                        time.sleep(0.2)  # Wait 200ms before retry
+                    else:
+                        # Last attempt failed, raise the error
+                        raise PermissionError(
+                            f"Cannot delete database file '{db_path}'. "
+                            f"The file may be locked by another process. "
+                            f"Please close any applications using this collection and try again."
+                        )
+        
         if icon_path.exists():
             icon_path.unlink()
     

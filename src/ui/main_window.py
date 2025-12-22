@@ -1347,16 +1347,43 @@ class MainWindow(QMainWindow):
                 if self.current_collection == name:
                     if self.current_store:
                         self.current_store.close()
+                        # Force garbage collection to release file handle
+                        import gc
+                        gc.collect()
                     self.current_store = None
                     self.current_collection = None
+                    # Clear the table and form views
+                    self.table_view.set_collection(None, [])
+                    self.form_view.set_collection(None, [])
 
                 # Check if backup is enabled in settings
                 from src.core.config import Config
 
                 config = Config()
                 backup_enabled = config.get("backup_enabled", True)
+                
+                # Process events to ensure connection is fully closed
+                from PySide6.QtWidgets import QApplication
+                QApplication.processEvents()
+                
                 self.workspace.delete_collection(name, backup=backup_enabled)
+                
+                # Clear icon cache for deleted collection
+                cache_key = f"collection_{name}"
+                if cache_key in self._icon_cache:
+                    del self._icon_cache[cache_key]
+                
+                # Immediately refresh the collections list
                 self._load_collections()
+                
+                # Force update of the list widget to ensure it refreshes
+                self.collections_list.update()
+                self.collections_list.repaint()
+                
+                # Deselect any collection if the deleted one was selected
+                if self.current_collection == name:
+                    self._deselect_collection()
+                
                 self.statusBar().showMessage(f"Deleted collection: {name}")
             except ValueError as e:
                 QMessageBox.warning(self, "Error", str(e))
