@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QLabel,
     QMessageBox,
+    QAbstractItemView,
 )
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtCore import Qt, Signal, QSize, QEvent
@@ -33,14 +34,22 @@ from src.ui.form_view import FormView
 from src.ui.styles import AppStyles
 from src.ui.advanced_search_dialog import AdvancedSearchDialog
 from src.ui.update_dialog import UpdateDialog
+from src.ui.update_progress_dialog import UpdateProgressDialog
 
 
 class CollectionsListWidget(QListWidget):
-    """Custom QListWidget that prevents selection on right-click"""
+    """Custom QListWidget that prevents selection on right-click and supports drag and drop"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self._right_click_selected_row = -1
+        # Enable drag and drop for reordering
+        # Use InternalMove but ensure clicks are processed immediately
+        self.setDragDropMode(QAbstractItemView.InternalMove)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.setDragDropOverwriteMode(False)
+        # Set movement threshold - higher value means clicks register faster
+        # Qt's default is usually 4-10 pixels, we'll use a reasonable default
     
     def mousePressEvent(self, event: QMouseEvent):
         """Override to prevent selection on right-click"""
@@ -62,7 +71,22 @@ class CollectionsListWidget(QListWidget):
             
             self.blockSignals(False)
         else:
+            # For left clicks, process immediately - Qt's InternalMove will handle drag detection
+            # without delaying clicks
             super().mousePressEvent(event)
+    
+    def startDrag(self, supportedActions):
+        """Override to only start drag after actual mouse movement"""
+        # Let Qt handle the drag start - it already checks for movement
+        # This override ensures clicks are processed immediately
+        super().startDrag(supportedActions)
+    
+    def dropEvent(self, event):
+        """Handle drop event to save new collection order"""
+        super().dropEvent(event)
+        # Notify parent to save the new order (deferred to avoid blocking)
+        if hasattr(self.parent(), '_on_collections_reordered'):
+            self.parent()._on_collections_reordered()
 
 
 class MainWindow(QMainWindow):
@@ -89,6 +113,9 @@ class MainWindow(QMainWindow):
         
         # Update check threads (for proper lifecycle management)
         self.update_check_threads: list = []  # Keep references to prevent garbage collection
+        
+        # Icon cache to avoid reloading icons on every refresh
+        self._icon_cache: Dict[str, QIcon] = {}
 
         # Set window icon
         from PySide6.QtGui import QIcon
@@ -190,13 +217,14 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addLayout(sidebar_header)
 
-        self.collections_list = CollectionsListWidget()
+        self.collections_list = CollectionsListWidget(self)
         self.collections_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.collections_list.setIconSize(QSize(32, 32))  # Icon size for collections
         self.collections_list.customContextMenuRequested.connect(
             self._show_collection_context_menu
         )
-        self.collections_list.itemClicked.connect(self._on_collection_selected)
+        # Use currentItemChanged instead of itemClicked to avoid drag detection delay
+        self.collections_list.currentItemChanged.connect(self._on_collection_selected)
         # Handle clicks on empty space to deselect
         self.collections_list.itemSelectionChanged.connect(self._on_collection_selection_changed)
         # Track if we're in a right-click to prevent selection changes
@@ -659,28 +687,52 @@ class MainWindow(QMainWindow):
         for name in self.workspace.list_collections():
             item = QListWidgetItem(name)
 
-            # Load collection icon if available
+            # Load collection icon if available (with caching)
             icon_path = self.workspace.get_collection_icon_path(name)
-            if icon_path and icon_path.exists():
-                pixmap = QPixmap(str(icon_path))
-                if not pixmap.isNull():
-                    # Scale to icon size
-                    scaled_pixmap = pixmap.scaled(
-                        32, 32, Qt.KeepAspectRatio, Qt.SmoothTransformation
-                    )
-                    item.setIcon(QIcon(scaled_pixmap))
-            else:
-                # Default icon (quartz crystal)
-                default_icon_path = get_quartz_icon_path()
-                if default_icon_path.exists():
-                    pixmap = QPixmap(str(default_icon_path))
+            cache_key = f"collection_{name}"
+            
+            if cache_key not in self._icon_cache:
+                if icon_path and icon_path.exists():
+                    pixmap = QPixmap(str(icon_path))
                     if not pixmap.isNull():
+                        # Scale to icon size
                         scaled_pixmap = pixmap.scaled(
                             32, 32, Qt.KeepAspectRatio, Qt.SmoothTransformation
                         )
-                        item.setIcon(QIcon(scaled_pixmap))
+                        self._icon_cache[cache_key] = QIcon(scaled_pixmap)
+                else:
+                    # Default icon (quartz crystal) - cache this too
+                    if "default" not in self._icon_cache:
+                        default_icon_path = get_quartz_icon_path()
+                        if default_icon_path.exists():
+                            pixmap = QPixmap(str(default_icon_path))
+                            if not pixmap.isNull():
+                                scaled_pixmap = pixmap.scaled(
+                                    32, 32, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                                )
+                                self._icon_cache["default"] = QIcon(scaled_pixmap)
+                    if "default" in self._icon_cache:
+                        self._icon_cache[cache_key] = self._icon_cache["default"]
+            
+            if cache_key in self._icon_cache:
+                item.setIcon(self._icon_cache[cache_key])
 
             self.collections_list.addItem(item)
+
+    def _on_collections_reordered(self):
+        """Handle collection reordering via drag and drop"""
+        # Get current order of collections from the list widget
+        collection_names = []
+        for i in range(self.collections_list.count()):
+            item = self.collections_list.item(i)
+            if item:
+                collection_names.append(item.text())
+        
+        # Save the new order to workspace (async to avoid blocking UI)
+        if collection_names:
+            from PySide6.QtCore import QTimer
+            # Use a single-shot timer to defer the save operation
+            QTimer.singleShot(0, lambda: self.workspace.set_collection_order(collection_names))
 
     def _show_collection_context_menu(self, position):
         """Show context menu for collections"""
@@ -1309,8 +1361,10 @@ class MainWindow(QMainWindow):
             except ValueError as e:
                 QMessageBox.warning(self, "Error", str(e))
 
-    def _on_collection_selected(self, item: QListWidgetItem):
+    def _on_collection_selected(self, item: QListWidgetItem, previous: QListWidgetItem = None):
         """Handle collection selection"""
+        if item is None:
+            return
         collection_name = item.text()
         self._open_collection(collection_name)
         # Enable delete button
@@ -1379,13 +1433,21 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Error", f"Collection '{name}' not found")
             return
 
-        # Close previous store
+        # Close previous store and cleanup
         if self.current_store:
             self.current_store.close()
+            # Clear table view caches to free memory
+            if hasattr(self.table_view, 'model'):
+                self.table_view.model._record_cache.clear()
+                self.table_view.model._loaded_batches.clear()
+                self.table_view.model._formatted_cache.clear()
 
         # Open new collection
         db_path = self.workspace.workspace_path / info.db_path
         self.current_store = CollectionStore(db_path)
+        # Load key prefix from collection info if available
+        if hasattr(info, 'key_prefix') and info.key_prefix:
+            self.current_store.key_prefix = info.key_prefix
         self.current_store.connect()
         self.current_collection = name
 
@@ -1581,10 +1643,11 @@ class MainWindow(QMainWindow):
         dialog = NewCollectionDialog(self)
         if dialog.exec():
             name = dialog.get_collection_name()
+            key_prefix = dialog.get_key_prefix()
             fields = dialog.get_fields()
             try:
-                # Create collection
-                db_path = self.workspace.create_collection(name)
+                # Create collection with optional key prefix
+                db_path = self.workspace.create_collection(name, key_prefix=key_prefix)
 
                 # Add fields to the collection (if any)
                 if fields:
@@ -2555,8 +2618,15 @@ class MainWindow(QMainWindow):
         """Show update dialog and handle user response"""
         dialog = UpdateDialog(update_info, self)
         if dialog.exec():
-            # User chose to download
-            self._open_download_url(update_info)
+            # User chose to download - start automatic download and installation
+            download_url = update_info.get('download_url')
+            if download_url:
+                # Show progress dialog and download/install automatically
+                progress_dialog = UpdateProgressDialog(download_url, self)
+                progress_dialog.exec()
+            else:
+                # Fallback to manual download if no direct URL
+                self._open_download_url(update_info)
         elif dialog.ignored:
             # User chose to ignore this version
             ignored_versions = self.config.get("update_ignored_versions", [])
@@ -2565,7 +2635,7 @@ class MainWindow(QMainWindow):
                 self.config.set("update_ignored_versions", ignored_versions)
     
     def _open_download_url(self, update_info: dict):
-        """Open the download URL in the default browser"""
+        """Open the download URL in the default browser (fallback method)"""
         import webbrowser
         download_url = update_info.get('download_url')
         release_url = update_info.get('url')

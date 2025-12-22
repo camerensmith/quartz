@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QComboBox, QCheckBox, QFileDialog, QMessageBox, QGroupBox, QTextEdit
+    QComboBox, QCheckBox, QFileDialog, QMessageBox, QGroupBox, QWidget, QScrollArea
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
@@ -51,11 +51,13 @@ class AddFieldDialog(QDialog):
         label_layout.addWidget(self.label_input)
         layout.addLayout(label_layout)
         
-        # Key (editable)
+        # Key (read-only, auto-generated)
         key_layout = QHBoxLayout()
         key_layout.addWidget(QLabel("Key:"))
         self.key_input = QLineEdit()
-        self.key_input.setPlaceholderText("Field key (auto-generated from label)")
+        self.key_input.setReadOnly(True)
+        self.key_input.setPlaceholderText("Auto-generated from alias")
+        self.key_input.setStyleSheet("background-color: #f5f5f5; color: #666;")
         key_layout.addWidget(self.key_input)
         layout.addLayout(key_layout)
         
@@ -63,23 +65,37 @@ class AddFieldDialog(QDialog):
         type_layout = QHBoxLayout()
         type_layout.addWidget(QLabel("Type:"))
         self.type_combo = QComboBox()
-        self.type_combo.addItems(["text", "notes", "integer", "decimal", "checkbox", "date", "datetime", "select", "dropdown"])
+        self.type_combo.addItems(["text", "notes", "integer", "decimal", "checkbox", "date", "datetime", "select"])
         self.type_combo.currentTextChanged.connect(self._on_type_changed)
         type_layout.addWidget(self.type_combo)
         layout.addLayout(type_layout)
         
-        # Options (for select and dropdown types)
-        self.options_group = QGroupBox("Dropdown Options")
+        # Options (for select type)
+        self.options_group = QGroupBox("Select Options")
         options_layout = QVBoxLayout()
-        options_layout.addWidget(QLabel("Enter options (one per line):"))
-        self.options_input = QTextEdit()
-        self.options_input.setPlaceholderText("Option 1\nOption 2\nOption 3")
-        self.options_input.setMaximumHeight(100)
-        self.options_input.setVisible(False)  # Hidden by default
-        options_layout.addWidget(self.options_input)
+        options_layout.addWidget(QLabel("Add options for the dropdown:"))
+        
+        # Scroll area for options list
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setMaximumHeight(200)
+        scroll_area.setMinimumHeight(100)
+        
+        self.options_widget = QWidget()
+        self.options_list_layout = QVBoxLayout(self.options_widget)
+        self.options_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.options_list_layout.setSpacing(5)
+        
+        scroll_area.setWidget(self.options_widget)
+        options_layout.addWidget(scroll_area)
+        
         self.options_group.setLayout(options_layout)
         self.options_group.setVisible(False)  # Hidden by default
         layout.addWidget(self.options_group)
+        
+        # Store option input widgets and their layouts
+        self.option_inputs: list = []
+        self.option_layouts: list = []  # Store layouts for easy removal
         
         # Required
         self.required_check = QCheckBox("Required")
@@ -132,12 +148,84 @@ class AddFieldDialog(QDialog):
     
     def _on_type_changed(self, field_type: str):
         """Show/hide options input based on field type"""
-        if field_type in ("select", "dropdown"):
+        if field_type == "select":
             self.options_group.setVisible(True)
-            self.options_input.setVisible(True)
+            # Initialize with 2 empty options if none exist
+            if len(self.option_inputs) == 0:
+                self._add_option()
+                self._add_option()
         else:
             self.options_group.setVisible(False)
-            self.options_input.setVisible(False)
+    
+    def _add_option(self, initial_value: str = ""):
+        """Add a new option input row"""
+        option_layout = QHBoxLayout()
+        
+        option_input = QLineEdit()
+        option_input.setPlaceholderText(f"Option {len(self.option_inputs) + 1}")
+        if initial_value:
+            option_input.setText(initial_value)
+        option_layout.addWidget(option_input)
+        
+        add_btn = QPushButton("+")
+        add_btn.setMaximumWidth(35)
+        add_btn.setMaximumHeight(30)
+        add_btn.setMinimumWidth(35)
+        add_btn.setStyleSheet("font-size: 16px; font-weight: bold;")
+        add_btn.clicked.connect(lambda: self._add_option())
+        option_layout.addWidget(add_btn)
+        
+        remove_btn = QPushButton("−")
+        remove_btn.setMaximumWidth(35)
+        remove_btn.setMaximumHeight(30)
+        remove_btn.setMinimumWidth(35)
+        remove_btn.setStyleSheet("font-size: 16px; font-weight: bold;")
+        remove_btn.clicked.connect(lambda: self._remove_option(option_layout))
+        # Hide remove button if only one option
+        remove_btn.setVisible(len(self.option_inputs) > 0)
+        option_layout.addWidget(remove_btn)
+        
+        self.options_list_layout.addLayout(option_layout)
+        self.option_inputs.append(option_input)
+        self.option_layouts.append(option_layout)
+        
+        # Update remove buttons visibility
+        self._update_remove_buttons()
+    
+    def _remove_option(self, option_layout: QHBoxLayout):
+        """Remove an option input row"""
+        if len(self.option_inputs) <= 1:
+            return  # Keep at least one option
+        
+        # Find the index
+        try:
+            index = self.option_layouts.index(option_layout)
+            
+            # Remove widgets from layout
+            while option_layout.count():
+                child = option_layout.takeAt(0)
+                if child.widget():
+                    child.widget().deleteLater()
+            
+            # Remove from lists
+            self.options_list_layout.removeItem(option_layout)
+            self.option_inputs.pop(index)
+            self.option_layouts.pop(index)
+            
+            # Update remove buttons visibility
+            self._update_remove_buttons()
+        except ValueError:
+            pass  # Layout not found
+    
+    def _update_remove_buttons(self):
+        """Update visibility of remove buttons based on option count"""
+        show_remove = len(self.option_inputs) > 1
+        for layout in self.option_layouts:
+            # Remove button is the 3rd widget (index 2)
+            if layout.count() >= 3:
+                remove_btn = layout.itemAt(2).widget()
+                if remove_btn and isinstance(remove_btn, QPushButton):
+                    remove_btn.setVisible(show_remove)
     
     def _browse_image(self):
         """Browse for image file"""
@@ -169,13 +257,18 @@ class AddFieldDialog(QDialog):
         
         field_type = self.type_combo.currentText()
         
-        # Parse options for select and dropdown types
+        # Parse options for select type
         options = []
-        if field_type in ("select", "dropdown"):
-            options_text = self.options_input.toPlainText().strip()
-            if options_text:
-                # Split by newlines and filter out empty lines
-                options = [opt.strip() for opt in options_text.split("\n") if opt.strip()]
+        if field_type == "select":
+            # Get options from input widgets
+            for option_input in self.option_inputs:
+                option_text = option_input.text().strip()
+                if option_text:
+                    options.append(option_text)
+            
+            if not options:
+                QMessageBox.warning(self, "Validation", "Please add at least one option for the Select field")
+                return
         
         self.field_data = {
             "key": key,

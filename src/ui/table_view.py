@@ -47,7 +47,7 @@ class CellBorderDelegate(QStyledItemDelegate):
 
 
 class RecordsTableModel(QAbstractTableModel):
-    """Table model for records"""
+    """Table model for records with virtualization support"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -56,6 +56,18 @@ class RecordsTableModel(QAbstractTableModel):
         self.records: List[Dict] = []
         self.filtered_records: List[Dict] = []
         self._readonly = False  # Track readonly state
+        
+        # Virtualization support
+        self._virtualized = True  # Enable virtualization for large datasets
+        self._batch_size = 200  # Load 200 records at a time (reduced for better responsiveness)
+        self._loaded_batches: set = set()  # Track which batches are loaded
+        self._record_cache: Dict[int, Dict] = {}  # Cache records by row index
+        self._total_count = 0  # Total record count (without loading all)
+        self._search_query: Optional[str] = None  # Current search query
+        self._sort_column: Optional[int] = None  # Current sort column
+        self._sort_order = Qt.AscendingOrder  # Current sort order
+        self._max_cache_size = 2000  # Maximum cached records (prevent memory bloat)
+        self._formatted_cache: Dict[tuple, Any] = {}  # Cache formatted values: (row, col, role) -> value
     
     def _get_date_format(self) -> str:
         """Get date format from config"""
@@ -88,22 +100,142 @@ class RecordsTableModel(QAbstractTableModel):
             self.beginResetModel()
             self.records = []
             self.filtered_records = []
+            self._record_cache.clear()
+            self._loaded_batches.clear()
+            self._total_count = 0
             self.endResetModel()
         else:
             self._refresh_data()
 
     def _refresh_data(self):
-        """Refresh record data"""
+        """Refresh record data - uses virtualization for large datasets"""
         if not self.store:
             return
 
         self.beginResetModel()
-        self.records = self.store.list_records()
-        self.filtered_records = self.records.copy()
+        
+        # Clear all caches when refreshing to free memory
+        self._formatted_cache.clear()
+        # Aggressive cache cleanup - keep only recent entries if cache is large
+        if len(self._formatted_cache) > 1000:
+            # Keep only the most recent 500 entries
+            items = list(self._formatted_cache.items())[-500:]
+            self._formatted_cache = dict(items)
+        
+        # Get total count first (fast, doesn't load records)
+        self._total_count = self.store.count_records()
+        
+        # Decide whether to use virtualization based on record count
+        # Use virtualization for collections with more than 500 records (lowered threshold)
+        use_virtualization = self._virtualized and self._total_count > 500
+        
+        if use_virtualization:
+            # Virtualized mode: don't load all records, just track count
+            self.records = []  # Empty list, records loaded on demand
+            self.filtered_records = []  # Empty for now, will be populated on demand
+            self._record_cache.clear()
+            self._loaded_batches.clear()
+            
+            # Load first 2 batches immediately for initial display (better initial experience)
+            self._load_batch(0)
+            if self._total_count > self._batch_size:
+                self._load_batch(self._batch_size)
+        else:
+            # Small dataset: load all records (backward compatible)
+            self.records = self.store.list_records()
+            self.filtered_records = self.records.copy()
+            self._record_cache.clear()
+            self._loaded_batches.clear()
+        
         self.endResetModel()
+    
+    def _load_batch(self, row_index: int):
+        """Load a batch of records containing the given row index"""
+        if not self.store or self._total_count == 0:
+            return
+        
+        # Calculate which batch this row belongs to
+        batch_num = row_index // self._batch_size
+        offset = batch_num * self._batch_size
+        
+        # Skip if already loaded
+        if batch_num in self._loaded_batches:
+            return
+        
+        # Clean cache if it's getting too large (keep most recent batches)
+        if len(self._record_cache) > self._max_cache_size:
+            self._clean_cache()
+        
+        # Load the batch
+        batch_records = self.store.list_records(limit=self._batch_size, offset=offset)
+        
+        # Cache the records
+        for i, record in enumerate(batch_records):
+            cache_index = offset + i
+            self._record_cache[cache_index] = record
+        
+        # Mark batch as loaded
+        self._loaded_batches.add(batch_num)
+        
+        # In virtualized mode, filtered_records is not used for storage
+        # Records are accessed directly from cache via _get_record()
+        # filtered_records is kept empty in virtualized mode to save memory
+    
+    def _clean_cache(self):
+        """Clean old records from cache to free memory"""
+        if len(self._record_cache) <= self._max_cache_size:
+            return
+        
+        # Keep the most recently accessed batches (keep middle 80% of cache)
+        sorted_indices = sorted(self._record_cache.keys())
+        keep_start = len(sorted_indices) // 10  # Keep from 10% to 90%
+        keep_end = len(sorted_indices) - (len(sorted_indices) // 10)
+        
+        # Remove records outside the keep range
+        to_remove = []
+        for idx in sorted_indices[:keep_start]:
+            to_remove.append(idx)
+        for idx in sorted_indices[keep_end:]:
+            to_remove.append(idx)
+        
+        for idx in to_remove:
+            self._record_cache.pop(idx, None)
+            # Also mark batch as unloaded if all records from that batch are removed
+            batch_num = idx // self._batch_size
+            batch_start = batch_num * self._batch_size
+            batch_end = batch_start + self._batch_size
+            if not any(i in self._record_cache for i in range(batch_start, batch_end)):
+                self._loaded_batches.discard(batch_num)
+    
+    def _get_record(self, row: int) -> Optional[Dict]:
+        """Get record at row index, loading batch if needed"""
+        if not self.store:
+            return None
+        
+        # Check if we have it cached
+        if row in self._record_cache:
+            return self._record_cache[row]
+        
+        # Check if we're in virtualized mode
+        if self._virtualized and self._total_count > 500:
+            # Load the batch containing this row
+            self._load_batch(row)
+            return self._record_cache.get(row)
+        else:
+            # Non-virtualized mode: should be in filtered_records
+            if 0 <= row < len(self.filtered_records):
+                return self.filtered_records[row]
+        
+        return None
 
     def rowCount(self, parent=QModelIndex()) -> int:
-        return len(self.filtered_records)
+        """Return total row count (virtualized or actual)"""
+        if self._virtualized and self._total_count > 1000:
+            # In virtualized mode, return total count
+            return self._total_count
+        else:
+            # Non-virtualized mode: return actual filtered count
+            return len(self.filtered_records)
 
     def columnCount(self, parent=QModelIndex()) -> int:
         # Add 1 for primary key column
@@ -144,66 +276,81 @@ class RecordsTableModel(QAbstractTableModel):
         row = index.row()
         col = index.column()
 
+        # Check cache first (for formatted values)
+        cache_key = (row, col, role)
+        if cache_key in self._formatted_cache:
+            return self._formatted_cache[cache_key]
+
+        # Get record (will load batch if needed in virtualized mode)
+        record = self._get_record(row)
+        if not record:
+            return None
+
+        result = None
+
         # Primary key column (column 0)
         if col == 0:
-            if row >= len(self.filtered_records):
-                return None
-            record = self.filtered_records[row]
             if role == Qt.DisplayRole or role == Qt.EditRole:
-                return str(record.get("id", ""))
+                result = str(record.get("id", ""))
             elif role == Qt.DecorationRole:
-                # Show key icon in cells
+                # Show key icon in cells - cache the icon path lookup
                 from src.core.resource_path import asset_path
                 key_icon_path = asset_path("key.png")
                 if key_icon_path.exists():
-                    return QIcon(str(key_icon_path))
-            return None
+                    result = QIcon(str(key_icon_path))
+        else:
+            # Regular field columns
+            if col - 1 < len(self.fields):
+                field = self.fields[col - 1]  # Adjust for primary key column
+                field_key = field["key"]
+                field_type = field.get("type", "text")
 
-        # Regular field columns
-        if row >= len(self.filtered_records) or col - 1 >= len(self.fields):
-            return None
-
-        record = self.filtered_records[row]
-        field = self.fields[col - 1]  # Adjust for primary key column
-        field_key = field["key"]
-        field_type = field.get("type", "text")
-
-        if role == Qt.DisplayRole or role == Qt.EditRole:
-            value = record.get(field_key)
-            if value is None:
-                return ""
-            
-            # Format date/datetime values according to user preferences
-            if field_type == "date":
-                try:
-                    from datetime import datetime
-                    if isinstance(value, str):
-                        dt = datetime.fromisoformat(value)
+                if role == Qt.DisplayRole or role == Qt.EditRole:
+                    value = record.get(field_key)
+                    if value is None:
+                        result = ""
                     else:
-                        dt = value
-                    date = QDate(dt.year, dt.month, dt.day)
-                    # Get date format from config
-                    date_format = self._get_date_format()
-                    return date.toString(date_format) if date_format else str(value)
-                except (ValueError, TypeError, AttributeError):
-                    return str(value)
-            elif field_type == "datetime":
-                try:
-                    from datetime import datetime
-                    if isinstance(value, str):
-                        dt = datetime.fromisoformat(value)
-                    else:
-                        dt = value
-                    qdt = QDateTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
-                    # Get datetime format from config
-                    datetime_format = self._get_datetime_format()
-                    return qdt.toString(datetime_format) if datetime_format else str(value)
-                except (ValueError, TypeError, AttributeError):
-                    return str(value)
-            
-            return str(value)
-
-        return None
+                        # Format date/datetime values according to user preferences
+                        if field_type == "date":
+                            try:
+                                from datetime import datetime
+                                if isinstance(value, str):
+                                    dt = datetime.fromisoformat(value)
+                                else:
+                                    dt = value
+                                date = QDate(dt.year, dt.month, dt.day)
+                                # Get date format from config
+                                date_format = self._get_date_format()
+                                result = date.toString(date_format) if date_format else str(value)
+                            except (ValueError, TypeError, AttributeError):
+                                result = str(value)
+                        elif field_type == "datetime":
+                            try:
+                                from datetime import datetime
+                                if isinstance(value, str):
+                                    dt = datetime.fromisoformat(value)
+                                else:
+                                    dt = value
+                                qdt = QDateTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
+                                # Get datetime format from config
+                                datetime_format = self._get_datetime_format()
+                                result = qdt.toString(datetime_format) if datetime_format else str(value)
+                            except (ValueError, TypeError, AttributeError):
+                                result = str(value)
+                        else:
+                            result = str(value)
+        
+        # Cache the result (only for DisplayRole to save memory)
+        if result is not None and role == Qt.DisplayRole:
+            # Limit cache size to prevent memory bloat
+            if len(self._formatted_cache) > 5000:
+                # Clear oldest 50% of cache
+                keys_to_remove = list(self._formatted_cache.keys())[:2500]
+                for key in keys_to_remove:
+                    self._formatted_cache.pop(key, None)
+            self._formatted_cache[cache_key] = result
+        
+        return result
 
     def setData(self, index: QModelIndex, value, role=Qt.EditRole) -> bool:
         if not index.isValid() or role != Qt.EditRole:
@@ -244,10 +391,12 @@ class RecordsTableModel(QAbstractTableModel):
             except (ValueError, TypeError):
                 return False
 
-        if row >= len(self.filtered_records) or col - 1 >= len(self.fields):
+        if col - 1 >= len(self.fields):
             return False
 
-        record = self.filtered_records[row]
+        record = self._get_record(row)
+        if not record:
+            return False
         field = self.fields[col - 1]  # Adjust for primary key column
         field_key = field["key"]
         record_id = record["id"]
@@ -310,11 +459,17 @@ class RecordsTableModel(QAbstractTableModel):
 
         # Update local data - also update in main records list
         record[field_key] = value
-        # Find and update in main records list
-        for main_record in self.records:
-            if main_record["id"] == record_id:
-                main_record[field_key] = value
-                break
+        # Update cache if in virtualized mode
+        if self._virtualized and self._total_count > 1000:
+            # Update cached record
+            if row in self._record_cache:
+                self._record_cache[row][field_key] = value
+        else:
+            # Find and update in main records list (non-virtualized mode)
+            for main_record in self.records:
+                if main_record["id"] == record_id:
+                    main_record[field_key] = value
+                    break
 
         # Clear any validation errors for this cell
         parent = self.parent()
@@ -323,6 +478,10 @@ class RecordsTableModel(QAbstractTableModel):
             if hasattr(parent, "error_delegate"):
                 parent.error_delegate.clear_error(row, col)
 
+        # Clear formatted cache for this cell
+        cache_key = (row, col, Qt.DisplayRole)
+        self._formatted_cache.pop(cache_key, None)
+        
         self.dataChanged.emit(index, index, [role])
         
         # Notify main window to update navigation counter
@@ -341,6 +500,35 @@ class RecordsTableModel(QAbstractTableModel):
     
     def sort(self, column: int, order: Qt.SortOrder = Qt.AscendingOrder):
         """Sort the model by column"""
+        # Clear formatted cache when sorting
+        self._formatted_cache.clear()
+        
+        # For virtualized mode with large datasets, try database-level sorting first
+        if self._virtualized and self._total_count > 500:
+            # Try database-level sorting for simple cases (ID column or indexed fields)
+            if column == 0:
+                # Sort by ID - can use database sorting
+                order_dir = "ASC" if order == Qt.AscendingOrder else "DESC"
+                # Reload with database sorting
+                self.beginResetModel()
+                self.records = self.store.list_records(order_by=f"id {order_dir}")
+                self.filtered_records = self.records.copy()
+                # Cache all records
+                self._record_cache.clear()
+                for i, record in enumerate(self.records):
+                    self._record_cache[i] = record
+                self.endResetModel()
+                return
+            
+            # For other columns, load all records for in-memory sorting
+            if not self.records:
+                # Load all records
+                self.records = self.store.list_records()
+                # Cache all records
+                for i, record in enumerate(self.records):
+                    self._record_cache[i] = record
+            self.filtered_records = self.records.copy()
+        
         if not self.filtered_records:
             return
         
@@ -424,6 +612,16 @@ class TableView(QTableView):
         self.setAlternatingRowColors(True)
         self.setShowGrid(True)
         
+        # Performance optimizations for large datasets
+        self.verticalScrollBar().setSingleStep(1)  # Smooth scrolling
+        
+        # Connect scroll events for pre-fetching in virtualized mode
+        from PySide6.QtCore import QTimer
+        self._prefetch_timer = QTimer()
+        self._prefetch_timer.setSingleShot(True)
+        self._prefetch_timer.timeout.connect(self._prefetch_visible_records)
+        self.verticalScrollBar().valueChanged.connect(self._on_scroll)
+        
         # Track current column for header bolding
         self.model._current_column = -1
         
@@ -472,6 +670,51 @@ class TableView(QTableView):
         # Set a default delegate for selected cell border (for ID column and any columns without field delegates)
         self._cell_border_delegate = CellBorderDelegate(self)
         self.setItemDelegate(self._cell_border_delegate)
+    
+    def _on_scroll(self):
+        """Handle scroll event - trigger pre-fetch after scroll stops"""
+        # Debounce pre-fetching to avoid loading too frequently
+        self._prefetch_timer.stop()
+        self._prefetch_timer.start(100)  # Reduced delay for more responsive loading
+    
+    def _prefetch_visible_records(self):
+        """Pre-fetch records around the visible area"""
+        if not self.model or not self.model.store:
+            return
+        
+        # Only pre-fetch in virtualized mode
+        if not (self.model._virtualized and self.model._total_count > 500):
+            return
+        
+        # Get visible row range
+        visible_rect = self.viewport().rect()
+        top_index = self.indexAt(visible_rect.topLeft())
+        bottom_index = self.indexAt(visible_rect.bottomLeft())
+        
+        if not top_index.isValid() or not bottom_index.isValid():
+            return
+        
+        # Pre-fetch more aggressively: 2 batches before and after visible area
+        prefetch_batches = 2
+        start_row = max(0, top_index.row() - (prefetch_batches * self.model._batch_size))
+        end_row = min(self.model._total_count - 1, bottom_index.row() + (prefetch_batches * self.model._batch_size))
+        
+        # Load batches for visible range (load in background to avoid blocking)
+        from PySide6.QtCore import QTimer
+        batches_to_load = []
+        for row in range(start_row, end_row + 1, self.model._batch_size):
+            batch_num = row // self.model._batch_size
+            if batch_num not in self.model._loaded_batches:
+                batches_to_load.append(row)
+        
+        # Load batches with slight delay to avoid blocking UI
+        if batches_to_load:
+            def load_next_batch():
+                if batches_to_load:
+                    self.model._load_batch(batches_to_load.pop(0))
+                    if batches_to_load:
+                        QTimer.singleShot(10, load_next_batch)  # Load next batch after 10ms
+            QTimer.singleShot(0, load_next_batch)  # Start loading immediately
 
     def set_collection(self, store: CollectionStore, fields: List[Dict]):
         """Set the collection to display"""

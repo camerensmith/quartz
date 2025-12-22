@@ -1,6 +1,6 @@
 """Dialog for creating a new collection with initial fields"""
 
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -20,6 +20,7 @@ class NewCollectionDialog(QDialog):
         self.setMinimumWidth(600)
         self.setMinimumHeight(400)
         self.collection_name = ""
+        self.key_prefix: Optional[str] = None
         self.fields: List[Dict] = []
         
         # Apply theme from parent if available
@@ -39,6 +40,19 @@ class NewCollectionDialog(QDialog):
         self.name_input.setPlaceholderText("e.g., Restaurants, Games, Books")
         name_layout.addWidget(self.name_input)
         layout.addLayout(name_layout)
+        
+        # Key prefix (optional)
+        prefix_layout = QHBoxLayout()
+        prefix_layout.addWidget(QLabel("ID Prefix (Optional):"))
+        self.prefix_input = QLineEdit()
+        self.prefix_input.setPlaceholderText("e.g., REST (will create IDs like REST_1, REST_2)")
+        prefix_layout.addWidget(self.prefix_input)
+        layout.addLayout(prefix_layout)
+        
+        prefix_help = QLabel("Leave empty to use auto-incrementing numbers (1, 2, 3...).\nPrefix helps avoid ID conflicts when merging collections.")
+        prefix_help.setStyleSheet("color: #666; font-size: 11px;")
+        prefix_help.setWordWrap(True)
+        layout.addWidget(prefix_help)
         
         # Fields table
         layout.addWidget(QLabel("Fields:"))
@@ -102,7 +116,7 @@ class NewCollectionDialog(QDialog):
             
             # Type
             type_combo = QComboBox()
-            type_combo.addItems(["text", "notes", "integer", "decimal", "checkbox", "date", "datetime", "select", "dropdown"])
+            type_combo.addItems(["text", "notes", "integer", "decimal", "checkbox", "date", "datetime", "select"])
             type_combo.setCurrentText(field_data["type"])
             self.fields_table.setCellWidget(row, 2, type_combo)
             
@@ -183,13 +197,29 @@ class NewCollectionDialog(QDialog):
         # Fields are optional - collection can be created without fields
         # User can add fields later via Collection Properties
         
+        # Get key prefix (optional)
+        prefix = self.prefix_input.text().strip()
+        if prefix:
+            # Validate prefix - alphanumeric and underscores only
+            if not all(c.isalnum() or c == '_' for c in prefix):
+                QMessageBox.warning(self, "Validation", "ID prefix can only contain letters, numbers, and underscores")
+                return
+            if prefix[0].isdigit():
+                QMessageBox.warning(self, "Validation", "ID prefix must start with a letter or underscore")
+                return
+        
         self.collection_name = name
+        self.key_prefix = prefix if prefix else None
         self.fields = fields
         self.accept()
     
     def get_collection_name(self) -> str:
         """Get the collection name"""
         return self.collection_name
+    
+    def get_key_prefix(self) -> Optional[str]:
+        """Get the key prefix"""
+        return self.key_prefix
     
     def get_fields(self) -> List[Dict]:
         """Get the field definitions"""

@@ -2,7 +2,7 @@
 
 import sqlite3
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Union
 from datetime import datetime
 import json
 
@@ -13,6 +13,7 @@ class CollectionStore:
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
         self.conn: Optional[sqlite3.Connection] = None
+        self.key_prefix: Optional[str] = None  # Prefix for record IDs (e.g., "REST" -> "REST_1")
     
     def connect(self):
         """Open database connection"""
@@ -21,6 +22,12 @@ class CollectionStore:
             self.conn.row_factory = sqlite3.Row
             # Enable foreign keys
             self.conn.execute("PRAGMA foreign_keys = ON")
+            # Performance optimizations for large datasets
+            self.conn.execute("PRAGMA journal_mode = WAL")  # Write-Ahead Logging for better concurrency
+            self.conn.execute("PRAGMA synchronous = NORMAL")  # Balance between safety and speed
+            self.conn.execute("PRAGMA cache_size = -64000")  # 64MB cache (negative = KB)
+            self.conn.execute("PRAGMA temp_store = MEMORY")  # Store temp tables in memory
+            self.conn.execute("PRAGMA mmap_size = 268435456")  # 256MB memory-mapped I/O
     
     def close(self):
         """Close database connection"""
@@ -35,9 +42,10 @@ class CollectionStore:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
     
-    def initialize_schema(self):
+    def initialize_schema(self, key_prefix: Optional[str] = None):
         """Initialize database schema"""
         self.connect()
+        self.key_prefix = key_prefix
         cursor = self.conn.cursor()
         
         # Fields table (field definitions)
@@ -74,15 +82,52 @@ class CollectionStore:
             )
         """)
         
-        # Records table (dynamic columns will be added via ALTER TABLE)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS records (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                record_uuid TEXT UNIQUE NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
+        # Records table - use TEXT ID if prefix is provided, otherwise INTEGER
+        if key_prefix:
+            # Use TEXT ID with prefix
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS records (
+                    id TEXT PRIMARY KEY,
+                    record_uuid TEXT UNIQUE NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            # Create indexes for faster sorting and queries
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_records_created_at ON records(created_at)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_records_updated_at ON records(updated_at)
+            """)
+            # Create sequence table to track counter for this prefix
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS id_sequence (
+                    prefix TEXT PRIMARY KEY,
+                    counter INTEGER DEFAULT 0
+                )
+            """)
+            # Initialize counter for this prefix
+            cursor.execute("""
+                INSERT OR IGNORE INTO id_sequence (prefix, counter) VALUES (?, 0)
+            """, (key_prefix,))
+        else:
+            # Use INTEGER AUTOINCREMENT (default)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    record_uuid TEXT UNIQUE NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            # Create indexes for faster sorting and queries
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_records_created_at ON records(created_at)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_records_updated_at ON records(updated_at)
+            """)
         
         # Dependencies registry
         cursor.execute("""
@@ -248,8 +293,8 @@ class CollectionStore:
         fields = self.list_fields()
         return next((f for f in fields if f["key"] == field_key), None)
     
-    def add_record(self, data: Dict[str, Any]) -> int:
-        """Add a new record"""
+    def add_record(self, data: Dict[str, Any]) -> Union[int, str]:
+        """Add a new record - returns ID (int or str depending on prefix)"""
         self.connect()
         cursor = self.conn.cursor()
         now = datetime.now().isoformat()
@@ -257,10 +302,29 @@ class CollectionStore:
         import uuid
         record_uuid = str(uuid.uuid4())
         
-        # Build column list and values
-        columns = ["record_uuid", "created_at", "updated_at"]
-        placeholders = ["?", "?", "?"]
-        values = [record_uuid, now, now]
+        # Generate record ID based on prefix
+        if self.key_prefix:
+            # Use prefix-based ID: "PREFIX_1", "PREFIX_2", etc.
+            # Get and increment counter
+            cursor.execute("""
+                UPDATE id_sequence SET counter = counter + 1 WHERE prefix = ?
+            """, (self.key_prefix,))
+            cursor.execute("""
+                SELECT counter FROM id_sequence WHERE prefix = ?
+            """, (self.key_prefix,))
+            result = cursor.fetchone()
+            counter = result[0] if result else 1
+            record_id = f"{self.key_prefix}_{counter}"
+            
+            # Build column list and values (include id)
+            columns = ["id", "record_uuid", "created_at", "updated_at"]
+            placeholders = ["?", "?", "?", "?"]
+            values = [record_id, record_uuid, now, now]
+        else:
+            # Use auto-increment INTEGER ID
+            columns = ["record_uuid", "created_at", "updated_at"]
+            placeholders = ["?", "?", "?"]
+            values = [record_uuid, now, now]
         
         for key, value in data.items():
             columns.append(key)
@@ -278,7 +342,10 @@ class CollectionStore:
             VALUES ({', '.join(placeholders)})
         """
         cursor.execute(sql, values)
-        record_id = cursor.lastrowid
+        
+        # Get the ID (for INTEGER, use lastrowid; for TEXT, we already have it)
+        if not self.key_prefix:
+            record_id = cursor.lastrowid
         
         # Update FTS index if needed
         self.update_fts_index()
@@ -313,7 +380,7 @@ class CollectionStore:
         
         self.conn.commit()
     
-    def delete_record(self, record_id: int):
+    def delete_record(self, record_id: Union[int, str]):
         """Delete a record"""
         self.connect()
         cursor = self.conn.cursor()
@@ -324,7 +391,7 @@ class CollectionStore:
         
         self.conn.commit()
     
-    def get_record(self, record_id: int) -> Optional[Dict]:
+    def get_record(self, record_id: Union[int, str]) -> Optional[Dict]:
         """Get a single record"""
         self.connect()
         cursor = self.conn.cursor()
@@ -334,13 +401,18 @@ class CollectionStore:
             return dict(row)
         return None
     
-    def list_records(self, limit: Optional[int] = None, offset: int = 0) -> List[Dict]:
-        """List records"""
+    def list_records(self, limit: Optional[int] = None, offset: int = 0, order_by: Optional[str] = None) -> List[Dict]:
+        """List records with optional ordering"""
         self.connect()
         cursor = self.conn.cursor()
-        sql = "SELECT * FROM records ORDER BY id"
+        
+        # Use provided order_by or default to id
+        order_clause = f"ORDER BY {order_by}" if order_by else "ORDER BY id"
+        
+        sql = f"SELECT * FROM records {order_clause}"
         if limit:
             sql += f" LIMIT {limit} OFFSET {offset}"
+        
         cursor.execute(sql)
         return [dict(row) for row in cursor.fetchall()]
     

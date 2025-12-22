@@ -16,6 +16,8 @@ class CollectionInfo:
     record_count: int = 0
     icon_path: Optional[str] = None  # Path to collection icon/image
     description: Optional[str] = None  # Short description of the collection
+    order: Optional[int] = None  # Display order (for drag and drop)
+    key_prefix: Optional[str] = None  # Prefix for record IDs (e.g., "REST" -> "REST_1", "REST_2")
     
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -27,6 +29,10 @@ class CollectionInfo:
             data['icon_path'] = None
         if 'description' not in data:
             data['description'] = None
+        if 'order' not in data:
+            data['order'] = None
+        if 'key_prefix' not in data:
+            data['key_prefix'] = None
         return cls(**data)
 
 
@@ -101,8 +107,14 @@ class Workspace:
             json.dump(data, f, indent=2)
     
     def list_collections(self) -> List[str]:
-        """List all collection names"""
-        return list(self.collections.keys())
+        """List all collection names in order"""
+        # Sort by order field if present, otherwise by name
+        collections_with_order = [
+            (name, info.order if info.order is not None else float('inf'))
+            for name, info in self.collections.items()
+        ]
+        collections_with_order.sort(key=lambda x: (x[1], x[0]))  # Sort by order, then by name
+        return [name for name, _ in collections_with_order]
     
     def get_collection_info(self, name: str) -> Optional[CollectionInfo]:
         """Get collection info by name"""
@@ -129,11 +141,14 @@ class Workspace:
         # Initialize database schema
         from src.core.collection_store import CollectionStore
         store = CollectionStore(db_path)
-        store.initialize_schema()
+        # Pass key_prefix to initialize schema if provided
+        store.initialize_schema(key_prefix=key_prefix)
         
         # Register collection
         from datetime import datetime
         now = datetime.now().isoformat()
+        # Set order to be after all existing collections
+        max_order = max([info.order for info in self.collections.values() if info.order is not None], default=-1)
         info = CollectionInfo(
             name=name,
             db_path=str(db_path.relative_to(self.workspace_path)),
@@ -141,7 +156,9 @@ class Workspace:
             updated_at=now,
             record_count=0,
             icon_path=None,
-            description=None
+            description=None,
+            order=max_order + 1,
+            key_prefix=key_prefix
         )
         self.collections[name] = info
         self.save_registry()
@@ -313,5 +330,26 @@ class Workspace:
         )
         self.collections[new_name] = info
         self.save_registry()
-        
+
         return new_db
+    
+    def set_collection_order(self, collection_names: List[str]):
+        """Set the display order of collections"""
+        from datetime import datetime
+        
+        # Update order for each collection
+        for index, name in enumerate(collection_names):
+            if name in self.collections:
+                info = self.collections[name]
+                info.order = index
+                info.updated_at = datetime.now().isoformat()
+        
+        # Collections not in the list get a high order (appear at end)
+        max_order = len(collection_names)
+        for name, info in self.collections.items():
+            if name not in collection_names:
+                if info.order is None or info.order >= max_order:
+                    info.order = max_order
+                    info.updated_at = datetime.now().isoformat()
+        
+        self.save_registry()

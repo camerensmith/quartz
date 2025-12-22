@@ -102,7 +102,7 @@ class FieldTypeDelegate(QStyledItemDelegate):
                 editor.setDisplayFormat(datetime_format)
             return editor
         
-        elif self.field_type in ("select", "single-select", "dropdown"):
+        elif self.field_type in ("select", "single-select"):
             editor = QComboBox(parent)
             options = self.field.get("options", [])
             if isinstance(options, str):

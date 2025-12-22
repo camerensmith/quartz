@@ -197,7 +197,7 @@ class FormView(QWidget):
             widget.dateTimeChanged.connect(self._on_field_changed)
             return widget
 
-        elif field_type in ("select", "single-select", "dropdown"):
+        elif field_type in ("select", "single-select"):
             widget = QComboBox()
             options = field.get("options", [])
             if isinstance(options, str):
