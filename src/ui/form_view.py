@@ -371,12 +371,18 @@ class FormView(QWidget):
         # Now create a new empty form
         self.new_record()
         
-        # Focus on first form field for keyboard navigation
-        if self.field_widgets:
-            first_field_key = self.fields[0]["key"] if self.fields else None
-            if first_field_key and first_field_key in self.field_widgets:
-                first_widget = self.field_widgets[first_field_key]
-                first_widget.setFocus()
+        # Delay focus slightly to ensure save is fully committed
+        # Use QTimer to focus after a short delay
+        from PySide6.QtCore import QTimer
+        def focus_first_field():
+            if self.field_widgets:
+                first_field_key = self.fields[0]["key"] if self.fields else None
+                if first_field_key and first_field_key in self.field_widgets:
+                    first_widget = self.field_widgets[first_field_key]
+                    first_widget.setFocus()
+        
+        # Delay focus by 100ms to ensure save completes
+        QTimer.singleShot(100, focus_first_field)
 
     def _show_validation_errors(self, errors: Dict[str, str]):
         """Display validation errors under fields"""
