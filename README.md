@@ -18,7 +18,18 @@ A cross-platform desktop application for managing personal databases, inspired b
 - **Python 3.11+** (required for modern typing and performance)
 - See `requirements.txt` for full dependency list
 
-## Installation
+
+## How to Use
+
+Download under "Releases"
+
+Run quartz.exe
+
+
+<img width="1382" height="878" alt="image" src="https://github.com/user-attachments/assets/d65ed729-7d3d-4888-baaf-a1b59fd42a03" />
+
+
+## Dev Installation
 
 ### Quick Start
 
