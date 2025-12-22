@@ -151,6 +151,36 @@ class CollectionStore:
         
         self.conn.commit()
     
+    def remove_field(self, field_key: str):
+        """Remove a field from the collection schema
+        
+        Note: SQLite doesn't support DROP COLUMN directly, so the column
+        will remain in the records table but will be ignored by the UI.
+        To fully remove the column, the table would need to be recreated.
+        """
+        self.connect()
+        cursor = self.conn.cursor()
+        
+        # Check if this field was indexed (before deleting)
+        cursor.execute("SELECT indexed FROM fields WHERE field_key = ?", (field_key,))
+        field_row = cursor.fetchone()
+        was_indexed = field_row and field_row[0] == 1
+        
+        # Remove from fields table
+        cursor.execute("DELETE FROM fields WHERE field_key = ?", (field_key,))
+        
+        # Remove any layout nodes referencing this field
+        cursor.execute("DELETE FROM layout_nodes WHERE field_key = ?", (field_key,))
+        
+        # Remove any dependencies referencing this field
+        cursor.execute("DELETE FROM deps WHERE source_id = ? OR target_id = ?", (field_key, field_key))
+        
+        # Update FTS index if needed (will rebuild without this field)
+        if was_indexed:
+            self.update_fts_index()
+        
+        self.conn.commit()
+    
     def update_fts_index(self):
         """Create or update FTS5 search index"""
         self.connect()

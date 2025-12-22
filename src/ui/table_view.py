@@ -499,6 +499,10 @@ class TableView(QTableView):
         # Get column at position
         column = self.horizontalHeader().logicalIndexAt(position.x())
         
+        # Validate column index
+        if column < 0 or column >= self.model.columnCount():
+            return
+        
         menu = QMenu(self)
         
         # For primary key column (column 0), show Hide/Show Key option
@@ -513,10 +517,14 @@ class TableView(QTableView):
                 show_action.triggered.connect(lambda: self.setColumnHidden(0, False))
         else:
             # For other columns, show field removal option
-            if column - 1 >= len(self.model.fields):
+            # Adjust for primary key column (column 0)
+            field_index = column - 1
+            
+            # Validate field index bounds
+            if field_index < 0 or field_index >= len(self.model.fields):
                 return
             
-            field = self.model.fields[column - 1]  # Adjust for primary key column
+            field = self.model.fields[field_index]
             field_key = field["key"]
             field_label = field["label"]
 
@@ -785,14 +793,37 @@ class TableView(QTableView):
         )
 
         if reply == QMessageBox.Yes:
-            # Note: Actual field removal requires schema migration
-            # For now, we'll just show a message that this needs to be done via Collection Properties
-            QMessageBox.information(
-                self,
-                "Field Removal",
-                f"To fully remove field '{field_label}', please use the Collection Properties dialog.\n\n"
-                f"The field column will remain in the database but can be hidden from the UI.",
-            )
+            if not self.model or not self.model.store:
+                return
+            
+            try:
+                # Remove field from database
+                self.model.store.remove_field(field_key)
+                
+                # Find main window to refresh the collection view
+                main_window = None
+                parent = self.parent()
+                while parent and not hasattr(parent, "_open_collection"):
+                    parent = parent.parent()
+                if parent and hasattr(parent, "_open_collection"):
+                    main_window = parent
+                
+                # Refresh the collection view
+                if main_window and hasattr(main_window, "current_collection") and main_window.current_collection:
+                    collection_name = main_window.current_collection
+                    main_window._open_collection(collection_name)
+                    main_window.statusBar().showMessage(f"Field '{field_label}' removed successfully", 3000)
+                else:
+                    # Fallback: just reload fields in current view
+                    fields = self.model.store.list_fields()
+                    self.set_collection(self.model.store, fields)
+                    
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"Failed to remove field: {str(e)}"
+                )
 
     def _handle_paste(self):
         """Handle paste from clipboard"""
