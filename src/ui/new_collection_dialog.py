@@ -145,6 +145,17 @@ class NewCollectionDialog(QDialog):
             # Remove special characters
             key = "".join(c for c in key if c.isalnum() or c == "_")
             if key and not key[0].isdigit():
+                # Get existing fields from table to check for conflicts
+                existing_fields = []
+                for r in range(self.fields_table.rowCount()):
+                    if r != row:  # Don't include current row
+                        existing_key_item = self.fields_table.item(r, 1)
+                        if existing_key_item and existing_key_item.text():
+                            existing_fields.append({"key": existing_key_item.text()})
+                
+                # Generate unique key
+                from src.ui.add_field_dialog import _generate_unique_field_key
+                key = _generate_unique_field_key(key, existing_fields)
                 key_item.setText(key)
     
     def _remove_field(self):

@@ -111,9 +111,15 @@ class FieldTypeDelegate(QStyledItemDelegate):
                     options = json.loads(options)
                 except:
                     options = []
-            if isinstance(options, list):
+            if isinstance(options, list) and len(options) > 0:
                 editor.addItems([str(opt) for opt in options])
+            else:
+                # If no options, add a placeholder
+                editor.addItem("(No options)")
             editor.setEditable(False)
+            # Ensure the combo box is interactive and can be clicked
+            editor.setEnabled(True)
+            editor.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
             return editor
         
         # Default: text editor
@@ -143,15 +149,19 @@ class FieldTypeDelegate(QStyledItemDelegate):
                     color: #212121;
                 }
                 QComboBox::drop-down {
-                    border: none;
-                    width: 16px;
+                    border: 1px solid #e0e0e0;
+                    border-radius: 2px;
+                    width: 20px;
+                }
+                QComboBox::drop-down:hover {
+                    border: 1px solid rgba(156, 39, 176, 0.5);
                 }
                 QComboBox::down-arrow {
-                    width: 0;
-                    height: 0;
-                    border-left: 4px solid transparent;
-                    border-right: 4px solid transparent;
-                    border-top: 5px solid rgba(156, 39, 176, 0.7);
+                    width: 12px;
+                    height: 12px;
+                    border-left: 6px solid transparent;
+                    border-right: 6px solid transparent;
+                    border-top: 8px solid #424242;
                 }
                 QComboBox QAbstractItemView {
                     background-color: #ffffff;
@@ -279,8 +289,17 @@ class FieldTypeDelegate(QStyledItemDelegate):
                 idx = editor.findText(str(value))
                 if idx >= 0:
                     editor.setCurrentIndex(idx)
+                else:
+                    # Value not in options, set to first item or empty
+                    if editor.count() > 0:
+                        editor.setCurrentIndex(0)
             else:
-                editor.setCurrentIndex(0)
+                # No value, set to first item if available
+                if editor.count() > 0:
+                    editor.setCurrentIndex(0)
+            # Ensure combo box is enabled and can receive focus
+            editor.setEnabled(True)
+            editor.setFocus()
     
     def setModelData(self, editor: QWidget, model: QAbstractItemModel, index: QModelIndex):
         """Set model value from editor"""

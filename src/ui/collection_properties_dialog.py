@@ -4,11 +4,18 @@ from typing import List, Dict, Optional
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QTableWidget, QTableWidgetItem, QComboBox, QMessageBox, QGroupBox, QCheckBox
+    QTableWidget, QTableWidgetItem, QComboBox, QMessageBox, QGroupBox, QCheckBox, QWidget
 )
 from PySide6.QtCore import Qt
 
 from src.core.collection_store import CollectionStore
+
+
+class ReorderableFieldsTable(QTableWidget):
+    """Custom QTableWidget with up/down buttons for reordering rows"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
 
 
 class CollectionPropertiesDialog(QDialog):
@@ -48,11 +55,13 @@ class CollectionPropertiesDialog(QDialog):
         
         # Fields table
         layout.addWidget(QLabel("Fields:"))
-        self.fields_table = QTableWidget()
-        self.fields_table.setColumnCount(5)
-        self.fields_table.setHorizontalHeaderLabels(["Alias", "Key", "Type", "Required", "Indexed"])
+        self.fields_table = ReorderableFieldsTable()
+        self.fields_table.setColumnCount(6)  # Added column for up/down buttons
+        self.fields_table.setHorizontalHeaderLabels(["", "Alias", "Key", "Type", "Required", "Indexed"])
         self.fields_table.horizontalHeader().setStretchLastSection(True)
         self.fields_table.setSelectionBehavior(QTableWidget.SelectRows)
+        # Set first column width for buttons
+        self.fields_table.setColumnWidth(0, 45)
         
         # Connect itemChanged to auto-generate keys for new fields
         self.fields_table.itemChanged.connect(self._on_item_changed)
@@ -67,6 +76,10 @@ class CollectionPropertiesDialog(QDialog):
         field_buttons.addWidget(add_field_btn)
         field_buttons.addWidget(remove_field_btn)
         field_buttons.addStretch()
+        # Add help text about reordering
+        help_label = QLabel("💡 Tip: Use ↑ ↓ buttons to reorder fields")
+        help_label.setStyleSheet("color: #666; font-size: 11px;")
+        field_buttons.addWidget(help_label)
         layout.addLayout(field_buttons)
         
         # Buttons
@@ -113,32 +126,35 @@ class CollectionPropertiesDialog(QDialog):
         self.fields_table.setRowCount(len(fields))
         
         for row, field in enumerate(fields):
-            # Label
+            # Create up/down buttons using helper method
+            self._create_move_buttons(row)
+            
+            # Label (column 1)
             label_item = QTableWidgetItem(field["label"])
-            self.fields_table.setItem(row, 0, label_item)
+            self.fields_table.setItem(row, 1, label_item)
             
-            # Key (read-only)
+            # Key (read-only) (column 2)
             key_item = QTableWidgetItem(field["key"])
-            key_item.setFlags(key_item.flags() & ~Qt.ItemIsEditable)
-            self.fields_table.setItem(row, 1, key_item)
+            key_item.setFlags(key_item.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsUserCheckable)
+            self.fields_table.setItem(row, 2, key_item)
             
-            # Type
+            # Type (column 3)
             type_combo = QComboBox()
             type_combo.addItems(["text", "notes", "integer", "decimal", "checkbox", "date", "datetime", "select"])
             type_combo.setCurrentText(field["type"])
-            self.fields_table.setCellWidget(row, 2, type_combo)
+            self.fields_table.setCellWidget(row, 3, type_combo)
             
-            # Required
+            # Required (column 4)
             required_item = QTableWidgetItem()
             required_item.setCheckState(Qt.Checked if field.get("required") else Qt.Unchecked)
             required_item.setFlags(required_item.flags() | Qt.ItemIsUserCheckable)
-            self.fields_table.setItem(row, 3, required_item)
+            self.fields_table.setItem(row, 4, required_item)
             
-            # Indexed
+            # Indexed (column 5)
             indexed_item = QTableWidgetItem()
             indexed_item.setCheckState(Qt.Checked if field.get("indexed") else Qt.Unchecked)
             indexed_item.setFlags(indexed_item.flags() | Qt.ItemIsUserCheckable)
-            self.fields_table.setItem(row, 4, indexed_item)
+            self.fields_table.setItem(row, 5, indexed_item)
     
     def _add_field(self):
         """Add a new field row - opens dialog to prompt for field details"""
@@ -152,37 +168,179 @@ class CollectionPropertiesDialog(QDialog):
             row = self.fields_table.rowCount()
             self.fields_table.insertRow(row)
             
-            # Label
+            # Create up/down buttons using helper method
+            self._create_move_buttons(row)
+            
+            # Label (column 1)
             label_item = QTableWidgetItem(field_data["label"])
-            self.fields_table.setItem(row, 0, label_item)
+            self.fields_table.setItem(row, 1, label_item)
             
-            # Key (editable)
+            # Key (editable) (column 2)
             key_item = QTableWidgetItem(field_data["key"])
-            self.fields_table.setItem(row, 1, key_item)
+            key_item.setFlags(key_item.flags() & ~Qt.ItemIsUserCheckable)
+            self.fields_table.setItem(row, 2, key_item)
             
-            # Type
+            # Type (column 3)
             type_combo = QComboBox()
             type_combo.addItems(["text", "notes", "integer", "decimal", "checkbox", "date", "datetime", "select"])
             type_combo.setCurrentText(field_data["type"])
-            self.fields_table.setCellWidget(row, 2, type_combo)
+            self.fields_table.setCellWidget(row, 3, type_combo)
             
-            # Required
+            # Required (column 4)
             required_item = QTableWidgetItem()
             required_item.setCheckState(Qt.Checked if field_data["required"] else Qt.Unchecked)
             required_item.setFlags(required_item.flags() | Qt.ItemIsUserCheckable)
-            self.fields_table.setItem(row, 3, required_item)
+            self.fields_table.setItem(row, 4, required_item)
             
-            # Indexed
+            # Indexed (column 5)
             indexed_item = QTableWidgetItem()
-            indexed_item.setCheckState(Qt.Unchecked)
+            indexed_item.setCheckState(Qt.Checked)  # Default to indexed
             indexed_item.setFlags(indexed_item.flags() | Qt.ItemIsUserCheckable)
-            self.fields_table.setItem(row, 4, indexed_item)
+            self.fields_table.setItem(row, 5, indexed_item)
+    
+    def _move_field_up(self, row: int):
+        """Move a field up one position"""
+        if row <= 0:
+            return
+        self._swap_rows(row, row - 1)
+        self._update_move_buttons()
+    
+    def _move_field_down(self, row: int):
+        """Move a field down one position"""
+        if row >= self.fields_table.rowCount() - 1:
+            return
+        self._swap_rows(row, row + 1)
+        self._update_move_buttons()
+    
+    def _swap_rows(self, row1: int, row2: int):
+        """Swap two rows in the table"""
+        # Store all data from both rows
+        row1_data = {}
+        row2_data = {}
+        
+        for col in range(self.fields_table.columnCount()):
+            # Store items
+            item1 = self.fields_table.item(row1, col)
+            item2 = self.fields_table.item(row2, col)
+            if item1:
+                row1_data[col] = QTableWidgetItem(item1.text())
+                row1_data[col].setFlags(item1.flags())
+                if item1.checkState() is not None:
+                    row1_data[col].setCheckState(item1.checkState())
+            if item2:
+                row2_data[col] = QTableWidgetItem(item2.text())
+                row2_data[col].setFlags(item2.flags())
+                if item2.checkState() is not None:
+                    row2_data[col].setCheckState(item2.checkState())
+            
+            # Store widgets
+            widget1 = self.fields_table.cellWidget(row1, col)
+            widget2 = self.fields_table.cellWidget(row2, col)
+            if widget1:
+                if isinstance(widget1, QComboBox):
+                    row1_data[f'widget_{col}'] = {
+                        'type': 'combo',
+                        'items': [widget1.itemText(i) for i in range(widget1.count())],
+                        'current': widget1.currentText()
+                    }
+                elif isinstance(widget1, QWidget) and col == 0:
+                    # For button widgets in column 0, we'll recreate them
+                    # Don't store the widget, we'll recreate it with correct row references
+                    pass
+            if widget2:
+                if isinstance(widget2, QComboBox):
+                    row2_data[f'widget_{col}'] = {
+                        'type': 'combo',
+                        'items': [widget2.itemText(i) for i in range(widget2.count())],
+                        'current': widget2.currentText()
+                    }
+                elif isinstance(widget2, QWidget) and col == 0:
+                    # For button widgets in column 0, we'll recreate them
+                    pass
+        
+        # Clear both rows
+        for col in range(self.fields_table.columnCount()):
+            self.fields_table.setItem(row1, col, None)
+            self.fields_table.setItem(row2, col, None)
+            self.fields_table.setCellWidget(row1, col, None)
+            self.fields_table.setCellWidget(row2, col, None)
+        
+        # Restore swapped data
+        for col, item in row1_data.items():
+            if isinstance(col, int):
+                self.fields_table.setItem(row2, col, item)
+        for col, item in row2_data.items():
+            if isinstance(col, int):
+                self.fields_table.setItem(row1, col, item)
+        
+        # Restore widgets
+        for key, widget_data in row1_data.items():
+            if isinstance(key, str) and key.startswith('widget_'):
+                col = int(key.split('_')[1])
+                if widget_data['type'] == 'combo':
+                    combo = QComboBox()
+                    combo.addItems(widget_data['items'])
+                    combo.setCurrentText(widget_data['current'])
+                    self.fields_table.setCellWidget(row2, col, combo)
+        
+        for key, widget_data in row2_data.items():
+            if isinstance(key, str) and key.startswith('widget_'):
+                col = int(key.split('_')[1])
+                if widget_data['type'] == 'combo':
+                    combo = QComboBox()
+                    combo.addItems(widget_data['items'])
+                    combo.setCurrentText(widget_data['current'])
+                    self.fields_table.setCellWidget(row1, col, combo)
+        
+        # Recreate button widgets with correct row references
+        self._create_move_buttons(row2)  # row1 moved to row2
+        self._create_move_buttons(row1)  # row2 moved to row1
+        
+        # Update button connections
+        self._update_move_buttons()
+    
+    def _create_move_buttons(self, row: int):
+        """Create up/down buttons for a specific row"""
+        button_widget = QWidget()
+        button_layout = QHBoxLayout(button_widget)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(0)
+        
+        up_btn = QPushButton("⬆")
+        up_btn.setFlat(True)
+        up_btn.setStyleSheet("QPushButton { border: none; background: transparent; padding: 2px; } QPushButton:hover { background: rgba(255, 255, 255, 0.1); }")
+        up_btn.setEnabled(row > 0)
+        up_btn.clicked.connect(lambda checked, r=row: self._move_field_up(r))
+        
+        down_btn = QPushButton("⬇")
+        down_btn.setFlat(True)
+        down_btn.setStyleSheet("QPushButton { border: none; background: transparent; padding: 2px; } QPushButton:hover { background: rgba(255, 255, 255, 0.1); }")
+        down_btn.setEnabled(row < self.fields_table.rowCount() - 1)
+        down_btn.clicked.connect(lambda checked, r=row: self._move_field_down(r))
+        
+        button_layout.addWidget(up_btn)
+        button_layout.addWidget(down_btn)
+        self.fields_table.setCellWidget(row, 0, button_widget)
+    
+    def _update_move_buttons(self):
+        """Update the enabled state of up/down buttons"""
+        for row in range(self.fields_table.rowCount()):
+            button_widget = self.fields_table.cellWidget(row, 0)
+            if button_widget:
+                layout = button_widget.layout()
+                if layout and layout.count() >= 2:
+                    up_btn = layout.itemAt(0).widget()
+                    down_btn = layout.itemAt(1).widget()
+                    if up_btn:
+                        up_btn.setEnabled(row > 0)
+                    if down_btn:
+                        down_btn.setEnabled(row < self.fields_table.rowCount() - 1)
     
     def _on_item_changed(self, item: QTableWidgetItem):
         """Auto-generate key when label changes"""
-        if item.column() == 0:
+        if item.column() == 1:  # Column 1 = Label
             row = item.row()
-            key_item = self.fields_table.item(row, 1)
+            key_item = self.fields_table.item(row, 2)  # Column 2 = Key
             if key_item and not key_item.text():
                 label = item.text()
                 key = label.lower().replace(" ", "").replace("-", "")
@@ -222,17 +380,18 @@ class CollectionPropertiesDialog(QDialog):
         existing_fields = {f["key"]: f for f in self.store.list_fields()}
         existing_keys = set(existing_fields.keys())
         
-        # Collect fields from table
+        # Collect fields from table (in order)
         new_fields = []
         updated_fields = []
         keys_in_table = set()
+        field_keys_in_order = []  # Track order for reordering
         
         for row in range(self.fields_table.rowCount()):
-            label_item = self.fields_table.item(row, 0)
-            key_item = self.fields_table.item(row, 1)
-            type_widget = self.fields_table.cellWidget(row, 2)
-            required_item = self.fields_table.item(row, 3)
-            indexed_item = self.fields_table.item(row, 4)
+            label_item = self.fields_table.item(row, 1)  # Column 1 = Label
+            key_item = self.fields_table.item(row, 2)    # Column 2 = Key
+            type_widget = self.fields_table.cellWidget(row, 3)  # Column 3 = Type
+            required_item = self.fields_table.item(row, 4)  # Column 4 = Required
+            indexed_item = self.fields_table.item(row, 5)  # Column 5 = Indexed
             
             if not label_item or not label_item.text().strip():
                 continue
@@ -249,6 +408,7 @@ class CollectionPropertiesDialog(QDialog):
                 return
             
             keys_in_table.add(key)
+            field_keys_in_order.append(key)  # Track order
             
             field_type = type_widget.currentText() if type_widget else "text"
             required = required_item.checkState() == Qt.Checked if required_item else False
@@ -267,7 +427,7 @@ class CollectionPropertiesDialog(QDialog):
             else:
                 new_fields.append(field_data)
         
-        # Add new fields
+        # Add new fields first (they need to exist before we can reorder)
         for field in new_fields:
             try:
                 self.store.add_field(
@@ -280,6 +440,14 @@ class CollectionPropertiesDialog(QDialog):
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to add field '{field['label']}': {str(e)}")
                 return
+        
+        # Save field order based on table row order (after all fields are saved)
+        if field_keys_in_order:
+            try:
+                self.store.reorder_fields(field_keys_in_order)
+            except Exception as e:
+                # If reordering fails, continue anyway (might be old schema without field_order column)
+                pass
         
         # Update existing fields (for now, we can only update required/indexed)
         # Full field editing would require schema migration

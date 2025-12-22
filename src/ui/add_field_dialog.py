@@ -11,6 +11,51 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 
 
+def _generate_unique_field_key(base_key: str, existing_fields: list) -> str:
+    """
+    Generate a unique field key by appending characters if needed.
+    
+    Args:
+        base_key: The base key to start with (e.g., "r")
+        existing_fields: List of existing field dicts with "key" attribute
+    
+    Returns:
+        A unique key (e.g., "r", "re", "ra", "r1", etc.)
+    """
+    existing_keys = {f["key"] for f in existing_fields} if existing_fields else set()
+    
+    # If base key is unique, return it
+    if base_key not in existing_keys:
+        return base_key
+    
+    # Try appending characters from the original label
+    # First, try single characters (a-z, 0-9)
+    for char in "abcdefghijklmnopqrstuvwxyz0123456789":
+        candidate = base_key + char
+        if candidate not in existing_keys:
+            return candidate
+    
+    # If still not unique, try two characters
+    for char1 in "abcdefghijklmnopqrstuvwxyz0123456789":
+        for char2 in "abcdefghijklmnopqrstuvwxyz0123456789":
+            candidate = base_key + char1 + char2
+            if candidate not in existing_keys:
+                return candidate
+    
+    # Last resort: append number
+    counter = 1
+    while True:
+        candidate = f"{base_key}{counter}"
+        if candidate not in existing_keys:
+            return candidate
+        counter += 1
+        if counter > 1000:  # Safety limit
+            break
+    
+    # Should never reach here, but fallback
+    return f"{base_key}_auto"
+
+
 class AddFieldDialog(QDialog):
     """Dialog for adding a new field with all options"""
     
@@ -144,6 +189,9 @@ class AddFieldDialog(QDialog):
             key = text.lower().replace(" ", "_").replace("-", "_")
             key = "".join(c for c in key if c.isalnum() or c == "_")
             if key and not key[0].isdigit():
+                # Make key unique if existing fields are provided
+                if self.existing_fields:
+                    key = _generate_unique_field_key(key, self.existing_fields)
                 self.key_input.setText(key)
     
     def _on_type_changed(self, field_type: str):
@@ -249,6 +297,12 @@ class AddFieldDialog(QDialog):
             key = "".join(c for c in key if c.isalnum() or c == "_")
             if not key or key[0].isdigit():
                 key = f"field_{key}" if key else "field_1"
+        
+        # Make key unique if existing fields are provided
+        if self.existing_fields:
+            key = _generate_unique_field_key(key, self.existing_fields)
+            # Update the key input to show the unique key
+            self.key_input.setText(key)
         
         # Validate key format
         if not key[0].isalpha() and key[0] != "_":

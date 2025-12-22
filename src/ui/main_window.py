@@ -1603,7 +1603,13 @@ class MainWindow(QMainWindow):
 
         if not query.strip():
             # Show all records
-            model.filtered_records = model.records.copy()
+            # In virtualized mode, we need to load records if they're not loaded
+            if model._virtualized and model._total_count > 500:
+                # For virtualized mode, clear filter by resetting
+                model._search_query = None
+                model._refresh_data()
+            else:
+                model.filtered_records = model.records.copy() if model.records else []
         else:
             # Parse query and search
             from src.core.query_parser import QueryParser
@@ -1623,6 +1629,9 @@ class MainWindow(QMainWindow):
             except Exception:
                 # If parsing fails, use simple search
                 model.filtered_records = self.current_store.search_records(query)
+            
+            # Store search query for virtualized mode
+            model._search_query = query
 
         model.beginResetModel()
         model.endResetModel()
@@ -1680,13 +1689,30 @@ class MainWindow(QMainWindow):
                 if fields:
                     store = CollectionStore(db_path)
                     store.connect()
+                    # Get existing fields to check for conflicts
+                    existing_fields = store.list_fields()
+                    existing_keys = {f["key"] for f in existing_fields}
+                    
                     for field in fields:
-                        store.add_field(
-                            field_key=field["key"],
-                            field_type=field["type"],
-                            label=field["label"],
-                            required=field.get("required", False),
-                        )
+                        # Generate unique key if needed
+                        from src.ui.add_field_dialog import _generate_unique_field_key
+                        field_key = _generate_unique_field_key(field["key"], existing_fields)
+                        
+                        # Only add if it doesn't already exist
+                        if field_key not in existing_keys:
+                            store.add_field(
+                                field_key=field_key,
+                                field_type=field["type"],
+                                label=field["label"],
+                                required=field.get("required", False),
+                                default_value=field.get("default_value"),
+                                validation_rules=field.get("validation_rules"),
+                                options=field.get("options"),
+                                indexed=field.get("indexed", False),
+                            )
+                            # Add to existing fields list to prevent future conflicts
+                            existing_fields.append({"key": field_key})
+                            existing_keys.add(field_key)
                     store.close()
 
                 self._load_collections()
@@ -1901,9 +1927,12 @@ class MainWindow(QMainWindow):
             model = self.table_view.model
             for index in selection:
                 row = index.row()
-                if row < len(model.filtered_records):
-                    record = model.filtered_records[row]
-                    selected_ids.append(record["id"])
+                # Use _get_record to handle virtualization properly
+                record = model._get_record(row)
+                if record:
+                    record_id = record.get("id")
+                    if record_id is not None:
+                        selected_ids.append(record_id)
 
         # Open export dialog
         from src.core.export_service import ExportService
@@ -1936,7 +1965,7 @@ class MainWindow(QMainWindow):
                     field_type=field_data["type"],
                     label=field_data["label"],
                     required=field_data.get("required", False),
-                    indexed=False,  # Default to not indexed
+                    indexed=True,  # Default to indexed for searchability
                     options=field_data.get("options")  # Include options for select/dropdown fields
                 )
                 
@@ -2140,10 +2169,20 @@ class MainWindow(QMainWindow):
                     return
             else:
                 # Read CSV file using built-in csv module
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    reader = csv.reader(f)
-                    csv_headers = next(reader)
-                    csv_data = [row for row in reader]
+                # Detect encoding first
+                from src.ui.import_dialog import detect_file_encoding
+                encoding = detect_file_encoding(file_path_obj)
+                try:
+                    with open(file_path, 'r', encoding=encoding) as f:
+                        reader = csv.reader(f)
+                        csv_headers = next(reader)
+                        csv_data = [row for row in reader]
+                except UnicodeDecodeError:
+                    # If detected encoding fails, try with error handling
+                    with open(file_path, 'r', encoding=encoding, errors='replace') as f:
+                        reader = csv.reader(f)
+                        csv_headers = next(reader)
+                        csv_data = [row for row in reader]
             
             # Create fields from CSV headers
             fields_created = []

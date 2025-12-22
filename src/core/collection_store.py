@@ -71,10 +71,16 @@ class CollectionStore:
                 validation_rules TEXT,  -- JSON
                 options TEXT,  -- JSON (for select, multi-select)
                 indexed INTEGER DEFAULT 0,
+                field_order INTEGER DEFAULT 0,  -- Display order in form
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
         """)
+        # Add order column if it doesn't exist (for existing databases)
+        try:
+            cursor.execute("ALTER TABLE fields ADD COLUMN field_order INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         
         # Layout nodes (form designer layout)
         cursor.execute("""
@@ -184,19 +190,42 @@ class CollectionStore:
         cursor = self.conn.cursor()
         now = datetime.now().isoformat()
         
-        # Add to fields table
-        cursor.execute("""
-            INSERT INTO fields (field_key, field_type, label, required, default_value,
-                               validation_rules, options, indexed, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            field_key, field_type, label, 1 if required else 0,
-            default_value,
-            json.dumps(validation_rules) if validation_rules else None,
-            json.dumps(options) if options else None,
-            1 if indexed else 0,
-            now, now
-        ))
+        # Get the next order value (highest order + 1)
+        cursor.execute("SELECT MAX(field_order) FROM fields")
+        max_order = cursor.fetchone()[0]
+        next_order = (max_order or 0) + 1
+        
+        # Check if field_order column exists
+        cursor.execute("PRAGMA table_info(fields)")
+        columns = [col[1] for col in cursor.fetchall()]
+        has_order = 'field_order' in columns
+        
+        if has_order:
+            cursor.execute("""
+                INSERT INTO fields (field_key, field_type, label, required, default_value,
+                                   validation_rules, options, indexed, field_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                field_key, field_type, label, 1 if required else 0,
+                default_value,
+                json.dumps(validation_rules) if validation_rules else None,
+                json.dumps(options) if options else None,
+                1 if indexed else 0, next_order,
+                now, now
+            ))
+        else:
+            cursor.execute("""
+                INSERT INTO fields (field_key, field_type, label, required, default_value,
+                                   validation_rules, options, indexed, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                field_key, field_type, label, 1 if required else 0,
+                default_value,
+                json.dumps(validation_rules) if validation_rules else None,
+                json.dumps(options) if options else None,
+                1 if indexed else 0,
+                now, now
+            ))
         
         # Add column to records table
         cursor.execute(f"ALTER TABLE records ADD COLUMN {field_key} TEXT")
@@ -205,6 +234,54 @@ class CollectionStore:
         if indexed:
             self.update_fts_index()
         
+        self.conn.commit()
+    
+    def set_field_order(self, field_key: str, new_order: int):
+        """Update the display order of a field"""
+        self._ensure_schema()
+        self.connect()
+        cursor = self.conn.cursor()
+        
+        # Check if field_order column exists
+        cursor.execute("PRAGMA table_info(fields)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'field_order' not in columns:
+            # Add the column if it doesn't exist
+            try:
+                cursor.execute("ALTER TABLE fields ADD COLUMN field_order INTEGER DEFAULT 0")
+                self.conn.commit()
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+        
+        cursor.execute("""
+            UPDATE fields SET field_order = ?, updated_at = ?
+            WHERE field_key = ?
+        """, (new_order, datetime.now().isoformat(), field_key))
+        self.conn.commit()
+    
+    def reorder_fields(self, field_keys: List[str]):
+        """Reorder fields by providing a list of field keys in the desired order"""
+        self._ensure_schema()
+        self.connect()
+        cursor = self.conn.cursor()
+        
+        # Check if field_order column exists
+        cursor.execute("PRAGMA table_info(fields)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'field_order' not in columns:
+            # Add the column if it doesn't exist
+            try:
+                cursor.execute("ALTER TABLE fields ADD COLUMN field_order INTEGER DEFAULT 0")
+                self.conn.commit()
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+        
+        now = datetime.now().isoformat()
+        for order, field_key in enumerate(field_keys, start=1):
+            cursor.execute("""
+                UPDATE fields SET field_order = ?, updated_at = ?
+                WHERE field_key = ?
+            """, (order, now, field_key))
         self.conn.commit()
     
     def remove_field(self, field_key: str):
@@ -290,25 +367,52 @@ class CollectionStore:
         self._ensure_schema()
         self.connect()
         cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT field_key, field_type, label, required, default_value,
-                   validation_rules, options, indexed
-            FROM fields
-            ORDER BY created_at
-        """)
+        # Check if field_order column exists
+        cursor.execute("PRAGMA table_info(fields)")
+        columns = [col[1] for col in cursor.fetchall()]
+        has_order = 'field_order' in columns
+        
+        if has_order:
+            cursor.execute("""
+                SELECT field_key, field_type, label, required, default_value,
+                       validation_rules, options, indexed, field_order
+                FROM fields
+                ORDER BY field_order, created_at
+            """)
+        else:
+            cursor.execute("""
+                SELECT field_key, field_type, label, required, default_value,
+                       validation_rules, options, indexed
+                FROM fields
+                ORDER BY created_at
+            """)
         
         fields = []
         for row in cursor.fetchall():
-            field = {
-                "key": row[0],
-                "type": row[1],
-                "label": row[2],
-                "required": bool(row[3]),
-                "default_value": row[4],
-                "validation_rules": json.loads(row[5]) if row[5] else None,
-                "options": json.loads(row[6]) if row[6] else None,
-                "indexed": bool(row[7])
-            }
+            if has_order:
+                field = {
+                    "key": row[0],
+                    "type": row[1],
+                    "label": row[2],
+                    "required": bool(row[3]),
+                    "default_value": row[4],
+                    "validation_rules": json.loads(row[5]) if row[5] else None,
+                    "options": json.loads(row[6]) if row[6] else None,
+                    "indexed": bool(row[7]),
+                    "order": row[8] if row[8] is not None else 0
+                }
+            else:
+                field = {
+                    "key": row[0],
+                    "type": row[1],
+                    "label": row[2],
+                    "required": bool(row[3]),
+                    "default_value": row[4],
+                    "validation_rules": json.loads(row[5]) if row[5] else None,
+                    "options": json.loads(row[6]) if row[6] else None,
+                    "indexed": bool(row[7]),
+                    "order": 0
+                }
             fields.append(field)
         
         return fields

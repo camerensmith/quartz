@@ -212,6 +212,10 @@ class RecordsTableModel(QAbstractTableModel):
         if not self.store:
             return None
         
+        # If we have filtered_records (from search/filter), use those first
+        if self.filtered_records and 0 <= row < len(self.filtered_records):
+            return self.filtered_records[row]
+        
         # Check if we have it cached
         if row in self._record_cache:
             return self._record_cache[row]
@@ -222,20 +226,25 @@ class RecordsTableModel(QAbstractTableModel):
             self._load_batch(row)
             return self._record_cache.get(row)
         else:
-            # Non-virtualized mode: should be in filtered_records
-            if 0 <= row < len(self.filtered_records):
-                return self.filtered_records[row]
+            # Non-virtualized mode: should be in records
+            if self.records and 0 <= row < len(self.records):
+                return self.records[row]
         
         return None
 
     def rowCount(self, parent=QModelIndex()) -> int:
         """Return total row count (virtualized or actual)"""
-        if self._virtualized and self._total_count > 1000:
+        # If we have filtered_records, use that count
+        if self.filtered_records:
+            return len(self.filtered_records)
+        
+        # Otherwise, use virtualized count or regular records count
+        if self._virtualized and self._total_count > 500:
             # In virtualized mode, return total count
             return self._total_count
         else:
-            # Non-virtualized mode: return actual filtered count
-            return len(self.filtered_records)
+            # Non-virtualized mode: return actual records count
+            return len(self.records) if self.records else 0
 
     def columnCount(self, parent=QModelIndex()) -> int:
         # Add 1 for primary key column
@@ -417,6 +426,7 @@ class RecordsTableModel(QAbstractTableModel):
                     global_pos = view.mapToGlobal(visual_rect.topLeft())
                     QToolTip.showText(global_pos, error_msg)
             # Mark cell as having error (for visual feedback)
+            parent = self.parent()  # Get parent before using it
             if parent and hasattr(parent, "error_delegate"):
                 parent.error_delegate.set_error(row, col, error_msg)
                 parent.validation_errors[(row, col)] = error_msg
@@ -500,8 +510,16 @@ class RecordsTableModel(QAbstractTableModel):
     
     def sort(self, column: int, order: Qt.SortOrder = Qt.AscendingOrder):
         """Sort the model by column"""
+        # Don't sort if store is not set (e.g., during initialization)
+        if not self.store:
+            return
+        
         # Clear formatted cache when sorting
         self._formatted_cache.clear()
+        
+        # Store sort state
+        self._sort_column = column
+        self._sort_order = order
         
         # For virtualized mode with large datasets, try database-level sorting first
         if self._virtualized and self._total_count > 500:
@@ -512,6 +530,7 @@ class RecordsTableModel(QAbstractTableModel):
                 # Reload with database sorting
                 self.beginResetModel()
                 self.records = self.store.list_records(order_by=f"id {order_dir}")
+                # In virtualized mode, populate filtered_records for sorting
                 self.filtered_records = self.records.copy()
                 # Cache all records
                 self._record_cache.clear()
@@ -520,14 +539,33 @@ class RecordsTableModel(QAbstractTableModel):
                 self.endResetModel()
                 return
             
-            # For other columns, load all records for in-memory sorting
-            if not self.records:
+            # For other columns, need to load all records for in-memory sorting
+            # Temporarily disable virtualization to load all records
+            if not self.records or len(self.records) < self._total_count:
                 # Load all records
                 self.records = self.store.list_records()
                 # Cache all records
+                self._record_cache.clear()
                 for i, record in enumerate(self.records):
                     self._record_cache[i] = record
-            self.filtered_records = self.records.copy()
+            
+            # Populate filtered_records from records (or use search results if filtered)
+            if not self.filtered_records:
+                # If no filter applied, use all records
+                self.filtered_records = self.records.copy()
+            elif len(self.filtered_records) < len(self.records):
+                # Filtered - keep filtered_records as is
+                pass
+            else:
+                # No filter, use all records
+                self.filtered_records = self.records.copy()
+        
+        # Ensure we have records to sort
+        if not self.filtered_records:
+            # Try to get records if we don't have them
+            if not self.records:
+                self.records = self.store.list_records()
+            self.filtered_records = self.records.copy() if self.records else []
         
         if not self.filtered_records:
             return

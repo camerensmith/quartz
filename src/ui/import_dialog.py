@@ -13,6 +13,56 @@ from PySide6.QtCore import Qt
 # pandas removed - using csv module and openpyxl directly
 
 
+def detect_file_encoding(file_path: Path) -> str:
+    """
+    Detect file encoding with fallback options.
+    
+    Args:
+        file_path: Path to the file
+        
+    Returns:
+        Detected encoding string
+    """
+    # Common encodings to try (in order of likelihood)
+    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1', 'windows-1252']
+    
+    # Try to detect encoding using chardet if available
+    try:
+        import chardet
+        with open(file_path, 'rb') as f:
+            raw_data = f.read(10000)  # Read first 10KB for detection
+            if raw_data:
+                detected = chardet.detect(raw_data)
+                if detected and detected.get('encoding'):
+                    detected_encoding = detected['encoding'].lower()
+                    # Normalize some common variations
+                    if detected_encoding in ['iso-8859-1', 'latin-1']:
+                        detected_encoding = 'latin-1'
+                    elif detected_encoding in ['windows-1252', 'cp1252']:
+                        detected_encoding = 'cp1252'
+                    # Add detected encoding to the front of the list
+                    if detected_encoding not in encodings:
+                        encodings.insert(0, detected_encoding)
+                    else:
+                        # Move to front
+                        encodings.remove(detected_encoding)
+                        encodings.insert(0, detected_encoding)
+    except (ImportError, Exception):
+        pass  # Fall back to default list (chardet not available or detection failed)
+    
+    # Try each encoding
+    for encoding in encodings:
+        try:
+            with open(file_path, 'r', encoding=encoding) as f:
+                f.read(1024)  # Try reading a small chunk
+            return encoding
+        except (UnicodeDecodeError, LookupError):
+            continue
+    
+    # Last resort: return utf-8 with errors='replace'
+    return 'utf-8'
+
+
 class ImportDialog(QDialog):
     """Dialog for importing CSV files"""
     
@@ -149,14 +199,27 @@ class ImportDialog(QDialog):
                     return
             else:
                 # Load CSV file using built-in csv module
-                with open(self.file_path, 'r', encoding='utf-8') as f:
-                    reader = csv.reader(f)
-                    self.csv_headers = next(reader)
-                    self.csv_data = []
-                    for i, row in enumerate(reader):
-                        if i >= 100:  # Limit preview
-                            break
-                        self.csv_data.append(row)
+                # Detect encoding first
+                encoding = detect_file_encoding(self.file_path)
+                try:
+                    with open(self.file_path, 'r', encoding=encoding) as f:
+                        reader = csv.reader(f)
+                        self.csv_headers = next(reader)
+                        self.csv_data = []
+                        for i, row in enumerate(reader):
+                            if i >= 100:  # Limit preview
+                                break
+                            self.csv_data.append(row)
+                except UnicodeDecodeError:
+                    # If detected encoding fails, try with error handling
+                    with open(self.file_path, 'r', encoding=encoding, errors='replace') as f:
+                        reader = csv.reader(f)
+                        self.csv_headers = next(reader)
+                        self.csv_data = []
+                        for i, row in enumerate(reader):
+                            if i >= 100:  # Limit preview
+                                break
+                            self.csv_data.append(row)
             
             self._populate_mapping_table()
         except Exception as e:
@@ -276,9 +339,15 @@ class ImportDialog(QDialog):
         
         try:
             # Count total rows
-            with open(self.file_path, 'r', encoding='utf-8') as f:
-                reader = csv.reader(f)
-                row_count = sum(1 for _ in reader) - (1 if self.skip_first_row_check.isChecked() else 0)
+            encoding = detect_file_encoding(self.file_path)
+            try:
+                with open(self.file_path, 'r', encoding=encoding) as f:
+                    reader = csv.reader(f)
+                    row_count = sum(1 for _ in reader) - (1 if self.skip_first_row_check.isChecked() else 0)
+            except UnicodeDecodeError:
+                with open(self.file_path, 'r', encoding=encoding, errors='replace') as f:
+                    reader = csv.reader(f)
+                    row_count = sum(1 for _ in reader) - (1 if self.skip_first_row_check.isChecked() else 0)
             
             QMessageBox.information(
                 self, "Import Preview",
@@ -335,6 +404,13 @@ class ImportDialog(QDialog):
                 field_key = "".join(c for c in field_key if c.isalnum() or c == "_")
                 if not field_key or field_key[0].isdigit():
                     field_key = f"field_{field_key}" if field_key else f"field_{len(new_fields_to_create)}"
+                
+                # Generate unique key - check against existing fields and already-created new fields
+                existing_fields = self.fields.copy()
+                existing_fields.extend([{"key": f["key"]} for f in new_fields_to_create])
+                from src.ui.add_field_dialog import _generate_unique_field_key
+                field_key = _generate_unique_field_key(field_key, existing_fields)
+                
                 new_fields_to_create.append({
                     "key": field_key,
                     "label": csv_col,
@@ -423,32 +499,75 @@ class ImportDialog(QDialog):
                     return
             else:
                 # Import from CSV
-                with open(self.file_path, 'r', encoding='utf-8') as f:
-                    reader = csv.DictReader(f) if self.skip_first_row_check.isChecked() else csv.reader(f)
-                    
-                    for row_idx, row in enumerate(reader):
-                        try:
-                            # Convert row to dict if needed
-                            if isinstance(row, list):
-                                row_dict = {self.csv_headers[i]: val for i, val in enumerate(row)}
-                            else:
-                                row_dict = row
-                            
-                            # Map to field keys
-                            record_data = {}
-                            for csv_col, field_key in mapping.items():
-                                value = row_dict.get(csv_col, "")
-                                if value:
-                                    record_data[field_key] = value
-                            
-                            # Add record
-                            if record_data:
-                                self.store.add_record(record_data)
-                                imported += 1
-                        except Exception as e:
-                            errors.append(f"Row {row_idx+1}: {str(e)}")
-                            if len(errors) >= 10:  # Limit error messages
-                                break
+                encoding = detect_file_encoding(self.file_path)
+                # Use headers from preview (self.csv_headers) - these are the actual CSV column names
+                csv_headers = self.csv_headers if self.csv_headers else []
+                
+                if not csv_headers:
+                    QMessageBox.warning(self, "Error", "No CSV headers found. Please reload the file.")
+                    return
+                
+                try:
+                    with open(self.file_path, 'r', encoding=encoding) as f:
+                        reader = csv.reader(f)
+                        # Skip first row if header checkbox is checked
+                        if self.skip_first_row_check.isChecked():
+                            next(reader, None)  # Skip header row
+                        
+                        # Now iterate over all data rows (while file is still open)
+                        for row_idx, row in enumerate(reader, start=1):
+                            try:
+                                # Convert row list to dict using headers
+                                row_dict = {}
+                                for i, val in enumerate(row):
+                                    if i < len(csv_headers):
+                                        row_dict[csv_headers[i]] = str(val) if val is not None else ""
+                                
+                                # Map to field keys
+                                record_data = {}
+                                for csv_col, field_key in mapping.items():
+                                    value = row_dict.get(csv_col, "")
+                                    if value and str(value).strip():  # Only add non-empty values
+                                        record_data[field_key] = str(value).strip()
+                                
+                                # Add record if we have any data
+                                if record_data:
+                                    self.store.add_record(record_data)
+                                    imported += 1
+                            except Exception as e:
+                                errors.append(f"Row {row_idx+1}: {str(e)}")
+                                if len(errors) >= 10:  # Limit error messages
+                                    break
+                except UnicodeDecodeError:
+                    with open(self.file_path, 'r', encoding=encoding, errors='replace') as f:
+                        reader = csv.reader(f)
+                        if self.skip_first_row_check.isChecked():
+                            next(reader, None)  # Skip header row
+                        
+                        # Now iterate over all data rows (while file is still open)
+                        for row_idx, row in enumerate(reader, start=1):
+                            try:
+                                # Convert row list to dict using headers
+                                row_dict = {}
+                                for i, val in enumerate(row):
+                                    if i < len(csv_headers):
+                                        row_dict[csv_headers[i]] = str(val) if val is not None else ""
+                                
+                                # Map to field keys
+                                record_data = {}
+                                for csv_col, field_key in mapping.items():
+                                    value = row_dict.get(csv_col, "")
+                                    if value and str(value).strip():  # Only add non-empty values
+                                        record_data[field_key] = str(value).strip()
+                                
+                                # Add record if we have any data
+                                if record_data:
+                                    self.store.add_record(record_data)
+                                    imported += 1
+                            except Exception as e:
+                                errors.append(f"Row {row_idx+1}: {str(e)}")
+                                if len(errors) >= 10:  # Limit error messages
+                                    break
             
             # Show results
             if errors:

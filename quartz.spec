@@ -11,7 +11,9 @@ a = Analysis(
         ('assets', 'assets'),
         ('quartz.png', '.'),
     ],
-    hiddenimports=[],
+    hiddenimports=[
+        'openpyxl',  # Required for Excel file import/export
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
