@@ -42,28 +42,6 @@ class FormView(QWidget):
         self.layout = QVBoxLayout(self)
         self.form_layout = QFormLayout()
         self.layout.addLayout(self.form_layout)
-    
-    def _get_date_format(self) -> str:
-        """Get date format from config"""
-        # Try to find config through parent chain
-        parent = self.parent()
-        while parent:
-            if hasattr(parent, 'config'):
-                return parent.config.get("date_format", "yyyy-MM-dd")
-            parent = parent.parent() if hasattr(parent, 'parent') else None
-        # Default if config not found
-        return "yyyy-MM-dd"
-    
-    def _get_datetime_format(self) -> str:
-        """Get datetime format from config"""
-        # Try to find config through parent chain
-        parent = self.parent()
-        while parent:
-            if hasattr(parent, 'config'):
-                return parent.config.get("datetime_format", "yyyy-MM-dd HH:mm:ss")
-            parent = parent.parent() if hasattr(parent, 'parent') else None
-        # Default if config not found
-        return "yyyy-MM-dd HH:mm:ss"
         
         # Button bar for form actions (aligned left, under form fields)
         self.button_layout = QHBoxLayout()
@@ -377,12 +355,15 @@ class FormView(QWidget):
         if self.current_record_id:
             # Update existing record
             self.store.update_record(self.current_record_id, data)
-            self.record_saved.emit(self.current_record_id)
+            saved_record_id = self.current_record_id
         else:
             # Create new record
             record_id = self.store.add_record(data)
             self.current_record_id = record_id
-            self.record_saved.emit(record_id)
+            saved_record_id = record_id
+        
+        # Emit signal to notify table view (must happen after save)
+        self.record_saved.emit(saved_record_id)
         
         # Restore loading flag
         self.loading_record = was_loading

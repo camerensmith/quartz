@@ -149,7 +149,7 @@ QTableView {{
     border: 1px solid #e0e0e0;
     border-radius: 4px;
     gridline-color: #f0f0f0;
-    selection-background-color: rgba({primary_rgb[0]}, {primary_rgb[1]}, {primary_rgb[2]}, 0.06);
+    selection-background-color: rgba({primary_rgb[0]}, {primary_rgb[1]}, {primary_rgb[2]}, 0.03);
     selection-color: #424242;
     font-size: 13px;
 }}
@@ -160,7 +160,7 @@ QTableView::item {{
 }}
 
 QTableView::item:selected {{
-    background-color: rgba({primary_rgb[0]}, {primary_rgb[1]}, {primary_rgb[2]}, 0.08);
+    background-color: rgba({primary_rgb[0]}, {primary_rgb[1]}, {primary_rgb[2]}, 0.04);
     color: #424242;
     border: none;
 }}
@@ -170,7 +170,7 @@ QTableView::item:hover {{
 }}
 
 QTableView::item:selected:hover {{
-    background-color: rgba({primary_rgb[0]}, {primary_rgb[1]}, {primary_rgb[2]}, 0.10);
+    background-color: rgba({primary_rgb[0]}, {primary_rgb[1]}, {primary_rgb[2]}, 0.05);
 }}
 
 /* Inline editor styling - subtle and non-intrusive */

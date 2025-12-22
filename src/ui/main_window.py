@@ -2778,10 +2778,24 @@ class MainWindow(QMainWindow):
 
     def _on_record_saved(self, record_id: int):
         """Handle record saved from form view"""
-        # Refresh table view
-        self.table_view.model._refresh_data()
+        # Refresh table view to show new/updated record
+        if self.table_view.model and self.table_view.model.store:
+            self.table_view.model._refresh_data()
+            # Force table view to update its display
+            self.table_view.viewport().update()
         # Update navigation counter
         self._update_navigation()
+        
+        # If in table view, select the newly saved record
+        if self.table_toggle.isChecked():
+            model = self.table_view.model
+            if model and model.filtered_records:
+                for i, record in enumerate(model.filtered_records):
+                    if record["id"] == record_id:
+                        self.table_view.selectRow(i)
+                        # Scroll to the selected row
+                        self.table_view.scrollTo(model.index(i, 0))
+                        break
     
     def eventFilter(self, obj, event):
         """Event filter to detect clicks on empty space in top bar and collections list"""

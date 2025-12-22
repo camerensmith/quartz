@@ -12,10 +12,38 @@ from PySide6.QtWidgets import (
     QAbstractItemDelegate,
 )
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, Signal, QDate, QDateTime
-from PySide6.QtGui import QKeySequence, QShortcut, QIcon, QKeyEvent
+from PySide6.QtGui import QKeySequence, QShortcut, QIcon, QKeyEvent, QFont, QPen, QMouseEvent
 
 from src.core.collection_store import CollectionStore
 from src.ui.table_delegates import FieldTypeDelegate, ValidationErrorDelegate
+
+
+class CellBorderDelegate(QStyledItemDelegate):
+    """Delegate that draws a black border around selected cells"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.view = parent
+    
+    def paint(self, painter, option, index):
+        """Paint cell with black border if selected"""
+        # Check if this cell is selected
+        if self.view and self.view.selectionModel():
+            is_selected = self.view.selectionModel().isSelected(index)
+            is_current = (index == self.view.currentIndex())
+            
+            if is_selected or is_current:
+                # Draw black border around selected/current cell
+                painter.save()
+                pen = QPen(Qt.black, 2)  # 2px black border
+                painter.setPen(pen)
+                # Draw border rectangle (inside the cell bounds)
+                border_rect = option.rect.adjusted(1, 1, -1, -1)
+                painter.drawRect(border_rect)
+                painter.restore()
+        
+        # Call parent paint to draw cell content
+        super().paint(painter, option, index)
 
 
 class RecordsTableModel(QAbstractTableModel):
@@ -100,6 +128,13 @@ class RecordsTableModel(QAbstractTableModel):
                 key_icon_path = asset_path("key.png")
                 if key_icon_path.exists():
                     return QIcon(str(key_icon_path))
+        elif role == Qt.FontRole:
+            # Make header bold if this is the current column
+            if orientation == Qt.Horizontal:
+                if hasattr(self, '_current_column') and section == self._current_column:
+                    font = QFont()
+                    font.setBold(True)
+                    return font
         return None
 
     def data(self, index: QModelIndex, role=Qt.DisplayRole):
@@ -384,10 +419,16 @@ class TableView(QTableView):
         self._readonly = False  # Track readonly state
 
         # Enable features
-        self.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.setSelectionBehavior(QAbstractItemView.SelectItems)  # Select individual cells
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)  # Allow multiple cell selection
         self.setAlternatingRowColors(True)
         self.setShowGrid(True)
+        
+        # Track current column for header bolding
+        self.model._current_column = -1
+        
+        # Connect to selection changes to update header boldness
+        self.selectionModel().currentChanged.connect(self._on_selection_changed)
 
         # Enable sorting
         self.setSortingEnabled(True)
@@ -427,6 +468,10 @@ class TableView(QTableView):
         self.error_delegate = ValidationErrorDelegate(self)
         self.field_delegates = {}
         self.validation_errors = {}  # Track errors by (row, col)
+        
+        # Set a default delegate for selected cell border (for ID column and any columns without field delegates)
+        self._cell_border_delegate = CellBorderDelegate(self)
+        self.setItemDelegate(self._cell_border_delegate)
 
     def set_collection(self, store: CollectionStore, fields: List[Dict]):
         """Set the collection to display"""
@@ -723,6 +768,42 @@ class TableView(QTableView):
         
         # Call parent implementation for other keys
         super().keyPressEvent(event)
+    
+    def _on_selection_changed(self, current: QModelIndex, previous: QModelIndex):
+        """Handle selection changes to update header boldness"""
+        old_column = self.model._current_column if hasattr(self.model, '_current_column') else -1
+        new_column = current.column() if current.isValid() else -1
+        
+        if old_column != new_column:
+            self.model._current_column = new_column
+            # Update header to refresh bold state
+            if old_column >= 0:
+                self.model.headerDataChanged.emit(Qt.Horizontal, old_column, old_column)
+            if new_column >= 0:
+                self.model.headerDataChanged.emit(Qt.Horizontal, new_column, new_column)
+    
+    def mousePressEvent(self, event: QMouseEvent):
+        """Handle mouse press events - clear selection if clicking outside cells"""
+        # Check if click is on a valid cell
+        index = self.indexAt(event.pos())
+        
+        if not index.isValid():
+            # Clicked outside any cell - clear selection
+            # Only clear if not clicking on headers or other table components
+            if event.pos().y() > self.horizontalHeader().height():
+                if self.selectionModel():
+                    self.selectionModel().clearSelection()
+                    self.setCurrentIndex(QModelIndex())  # Clear current index
+                    # Update header boldness
+                    if hasattr(self.model, '_current_column') and self.model._current_column >= 0:
+                        old_column = self.model._current_column
+                        self.model._current_column = -1
+                        self.model.headerDataChanged.emit(Qt.Horizontal, old_column, old_column)
+            event.accept()
+            return
+        
+        # Clicked on a valid cell - let parent handle it normally (allows editing)
+        super().mousePressEvent(event)
     
     def _get_field_for_column(self, column: int):
         """Get the field definition for a given column index"""
