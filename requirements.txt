@@ -1,1 +1,28 @@
-#Quartz-PersonalDatabaseDesktopApplication#Python3.11+required#UI/DesktopFrameworkPySide6>=6.5.0#Data&Storagejsonschema>=4.17.0#Search&Parsinglark>=1.1.0#File&DataHandlingpandas>=2.0.0python-dateutil>=2.8.0Pillow>=10.0.0openpyxl>=3.1.0#Plugin&Extensibilityimportlib-metadata>=6.0.0;pythonversion<"3.11"typing-extensions>=4.5.0#Validation&Utilitiespydantic>=2.0.0#Advanced/PowerUserFeaturessqlparse>=0.4.0tabulate>=0.9.0
+# Quartz - Personal Database Desktop Application
+# Python 3.11+ required
+
+# UI/Desktop Framework
+PySide6>=6.5.0
+
+# Data & Storage
+jsonschema>=4.17.0
+
+# Search & Parsing
+lark>=1.1.0
+
+# File & Data Handling
+# pandas>=2.0.0  # REMOVED - replaced with csv module and openpyxl
+python-dateutil>=2.8.0
+Pillow>=10.0.0
+openpyxl>=3.1.0
+
+# Plugin & Extensibility
+importlib-metadata>=6.0.0;python_version<"3.11"
+typing-extensions>=4.5.0
+
+# Validation & Utilities
+pydantic>=2.0.0
+
+# Advanced/Power User Features
+sqlparse>=0.4.0
+tabulate>=0.9.0

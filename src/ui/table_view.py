@@ -96,8 +96,8 @@ class RecordsTableModel(QAbstractTableModel):
         elif role == Qt.DecorationRole:
             # Show key icon for primary key column
             if orientation == Qt.Horizontal and section == 0:
-                from pathlib import Path
-                key_icon_path = Path(__file__).parent.parent.parent / "assets" / "key.png"
+                from src.core.resource_path import asset_path
+                key_icon_path = asset_path("key.png")
                 if key_icon_path.exists():
                     return QIcon(str(key_icon_path))
         return None
@@ -118,8 +118,8 @@ class RecordsTableModel(QAbstractTableModel):
                 return str(record.get("id", ""))
             elif role == Qt.DecorationRole:
                 # Show key icon in cells
-                from pathlib import Path
-                key_icon_path = Path(__file__).parent.parent.parent / "assets" / "key.png"
+                from src.core.resource_path import asset_path
+                key_icon_path = asset_path("key.png")
                 if key_icon_path.exists():
                     return QIcon(str(key_icon_path))
             return None
@@ -520,8 +520,9 @@ class TableView(QTableView):
             field_key = field["key"]
             field_label = field["label"]
 
+            from src.core.resource_path import asset_path
             remove_action = menu.addAction(
-                QIcon("assets/delete_column.svg"), f"Remove Field '{field_label}'..."
+                QIcon(str(asset_path("delete_column.svg"))), f"Remove Field '{field_label}'..."
             )
             remove_action.triggered.connect(
                 lambda: self._remove_field(field_key, field_label)

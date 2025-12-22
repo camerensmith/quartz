@@ -130,9 +130,10 @@ class ExportService:
     
     def export_excel(self, file_path: Path, record_ids: Optional[List[int]] = None,
                      include_headers: bool = True) -> bool:
-        """Export records to Excel (.xlsx)"""
+        """Export records to Excel (.xlsx) using openpyxl directly"""
         try:
-            import pandas as pd
+            from openpyxl import Workbook
+            from openpyxl.styles import Font
             
             fields = self.store.list_fields()
             field_keys = [f["key"] for f in fields]
@@ -145,22 +146,31 @@ class ExportService:
             else:
                 records = self.store.list_records()
             
-            # Prepare data for DataFrame
-            data = []
+            # Create workbook
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Records"
+            
+            # Write headers if requested
+            if include_headers:
+                header_row = field_labels
+                ws.append(header_row)
+                # Make header row bold
+                for cell in ws[1]:
+                    cell.font = Font(bold=True)
+            
+            # Write records
             for record in records:
                 row = []
                 for field_key, field in zip(field_keys, fields):
                     value = record.get(field_key, "")
                     # Format value based on field type
-                    value = self._format_value_for_export(field, value)
-                    row.append(value)
-                data.append(row)
+                    formatted_value = self._format_value_for_excel(field, value)
+                    row.append(formatted_value)
+                ws.append(row)
             
-            # Create DataFrame
-            df = pd.DataFrame(data, columns=field_labels if include_headers else None)
-            
-            # Write to Excel
-            df.to_excel(file_path, index=False, header=include_headers, engine='openpyxl')
+            # Save workbook
+            wb.save(file_path)
             
             return True
         except ImportError:
@@ -170,36 +180,62 @@ class ExportService:
             print(f"Export error: {e}")
             return False
     
+    def _format_value_for_excel(self, field: Dict, value: Any) -> Any:
+        """Format value for Excel export based on field type"""
+        if value is None or value == "":
+            return None  # Excel handles None as empty cell
+        
+        field_type = field.get("type", "text")
+        
+        if field_type == "checkbox":
+            # Convert to boolean
+            if isinstance(value, bool):
+                return value
+            value_str = str(value).lower()
+            return value_str in ("true", "1", "yes", "on")
+        elif field_type == "integer":
+            try:
+                return int(value)
+            except (ValueError, TypeError):
+                return str(value)
+        elif field_type == "decimal":
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                return str(value)
+        elif field_type in ("date", "datetime"):
+            # Keep as string (ISO format) - Excel will recognize it
+            return str(value)
+        
+        # Default: return as-is (openpyxl will handle basic types)
+        return str(value)
+    
     def _format_value_for_csv(self, field: Dict, value: Any) -> str:
         """Format value for CSV export based on field type"""
-        return str(self._format_value_for_export(field, value))
-    
-    def _format_value_for_export(self, field: Dict, value: Any) -> Any:
-        """Format value for export (CSV/Excel) based on field type"""
         if value is None or value == "":
             return ""
         
         field_type = field.get("type", "text")
         
         if field_type == "checkbox":
-            # Convert to boolean for Excel, string for CSV
+            # Convert to string representation
             if isinstance(value, bool):
-                return value
+                return "true" if value else "false"
             value_str = str(value).lower()
-            return value_str in ("true", "1", "yes", "on")
+            return "true" if value_str in ("true", "1", "yes", "on") else "false"
         elif field_type in ("date", "datetime"):
             # Keep ISO format
             return str(value)
         elif field_type == "integer":
             # Convert to int if possible
             try:
-                return int(value) if value else ""
+                return str(int(value)) if value else ""
             except (ValueError, TypeError):
                 return str(value)
         elif field_type == "decimal":
             # Convert to float if possible
             try:
-                return float(value) if value else ""
+                return str(float(value)) if value else ""
             except (ValueError, TypeError):
                 return str(value)
         

@@ -25,6 +25,7 @@ from PySide6.QtGui import QAction, QIcon, QKeySequence, QPixmap
 from src.core.config import Config
 from src.core.workspace import Workspace
 from src.core.collection_store import CollectionStore
+from src.core.resource_path import asset_path, get_quartz_icon_path
 from src.ui.table_view import TableView
 from src.ui.form_view import FormView
 from src.ui.styles import AppStyles
@@ -84,10 +85,9 @@ class MainWindow(QMainWindow):
         self.max_history = 50  # Maximum number of undo/redo steps
 
         # Set window icon
-        from pathlib import Path
         from PySide6.QtGui import QIcon
 
-        icon_path = Path(__file__).parent.parent.parent / "quartz.png"
+        icon_path = get_quartz_icon_path()
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
 
@@ -138,7 +138,7 @@ class MainWindow(QMainWindow):
         
         # Add collection button (left side)
         add_collection_btn = QPushButton()
-        add_collection_btn.setIcon(QIcon("assets/create_collection.png"))
+        add_collection_btn.setIcon(QIcon(str(asset_path("create_collection.png"))))
         add_collection_btn.setMaximumWidth(28)
         add_collection_btn.setMaximumHeight(28)
         add_collection_btn.setProperty("class", "icon-button")
@@ -148,7 +148,7 @@ class MainWindow(QMainWindow):
 
         # Delete collection button (left side)
         self.delete_collection_btn = QPushButton()
-        self.delete_collection_btn.setIcon(QIcon("assets/delete_collection.png"))
+        self.delete_collection_btn.setIcon(QIcon(str(asset_path("delete_collection.png"))))
         self.delete_collection_btn.setMaximumWidth(28)
         self.delete_collection_btn.setMaximumHeight(28)
         self.delete_collection_btn.setProperty("class", "icon-button")
@@ -251,7 +251,7 @@ class MainWindow(QMainWindow):
         nav_layout.addWidget(self.nav_label)
 
         self.prev_btn = QPushButton()
-        self.prev_btn.setIcon(QIcon("assets/up.png"))
+        self.prev_btn.setIcon(QIcon(str(asset_path("up.png"))))
         self.prev_btn.setProperty("class", "nav")
         self.prev_btn.setFixedSize(20, 20)
         self.prev_btn.setIconSize(QSize(16, 16))  # Slightly smaller than button to ensure it fits
@@ -259,7 +259,7 @@ class MainWindow(QMainWindow):
         nav_layout.addWidget(self.prev_btn)
 
         self.next_btn = QPushButton()
-        self.next_btn.setIcon(QIcon("assets/down.png"))
+        self.next_btn.setIcon(QIcon(str(asset_path("down.png"))))
         self.next_btn.setProperty("class", "nav")
         self.next_btn.setFixedSize(20, 20)
         self.next_btn.setIconSize(QSize(16, 16))  # Slightly smaller than button to ensure it fits
@@ -284,7 +284,7 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.search_box)
         
         # Advanced search button
-        adv_icon_path = Path(__file__).parent.parent.parent / "assets" / "adv.png"
+        adv_icon_path = asset_path("adv.png")
         self.adv_search_btn = QPushButton()
         if adv_icon_path.exists():
             self.adv_search_btn.setIcon(QIcon(str(adv_icon_path)))
@@ -353,7 +353,7 @@ class MainWindow(QMainWindow):
 
         # Collection actions with icons
         new_record_action = QAction(self)
-        new_record_action.setIcon(QIcon("assets/add_row.png"))
+        new_record_action.setIcon(QIcon(str(asset_path("add_row.png"))))
         new_record_action.setToolTip("New Record (Ctrl+N)")
         new_record_action.setShortcut(QKeySequence("Ctrl+N"))
         new_record_action.triggered.connect(self._new_record)
@@ -363,7 +363,7 @@ class MainWindow(QMainWindow):
         self.new_record_widget = toolbar.widgetForAction(new_record_action)
 
         delete_record_action = QAction(self)
-        delete_record_action.setIcon(QIcon("assets/delete_row.png"))
+        delete_record_action.setIcon(QIcon(str(asset_path("delete_row.png"))))
         delete_record_action.setToolTip("Delete Record (Delete)")
         delete_record_action.setShortcut(QKeySequence("Delete"))
         delete_record_action.triggered.connect(self._delete_record)
@@ -376,7 +376,7 @@ class MainWindow(QMainWindow):
 
         # Field actions
         add_field_action = QAction(self)
-        add_field_action.setIcon(QIcon("assets/add_field.png"))
+        add_field_action.setIcon(QIcon(str(asset_path("add_field.png"))))
         add_field_action.setToolTip("Add Field (Ctrl+G)")
         add_field_action.setShortcut(QKeySequence("Ctrl+G"))
         add_field_action.triggered.connect(self._add_field)
@@ -387,7 +387,7 @@ class MainWindow(QMainWindow):
         self.add_field_widget = toolbar.widgetForAction(add_field_action)
 
         delete_field_action = QAction(self)
-        delete_field_action.setIcon(QIcon("assets/delete_field.png"))
+        delete_field_action.setIcon(QIcon(str(asset_path("delete_field.png"))))
         delete_field_action.setToolTip("Delete Field")
         delete_field_action.triggered.connect(self._delete_field)
         delete_field_action.setEnabled(False)  # Disabled until collection selected
@@ -400,7 +400,7 @@ class MainWindow(QMainWindow):
 
         # Undo/Redo actions
         undo_action = QAction(self)
-        undo_action.setIcon(QIcon("assets/undo.png"))
+        undo_action.setIcon(QIcon(str(asset_path("undo.png"))))
         undo_action.setToolTip("Undo (Ctrl+Z)")
         undo_action.setShortcut(QKeySequence("Ctrl+Z"))
         undo_action.triggered.connect(self._undo)
@@ -409,7 +409,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(undo_action)
 
         redo_action = QAction(self)
-        redo_action.setIcon(QIcon("assets/redo.png"))
+        redo_action.setIcon(QIcon(str(asset_path("redo.png"))))
         redo_action.setToolTip("Redo (Ctrl+Y)")
         redo_action.setShortcut(QKeySequence("Ctrl+Y"))
         redo_action.triggered.connect(self._redo)
@@ -420,14 +420,14 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
 
         bulk_add_action = QAction(self)
-        bulk_add_action.setIcon(QIcon("assets/bulk.png"))
+        bulk_add_action.setIcon(QIcon(str(asset_path("bulk.png"))))
         bulk_add_action.setToolTip("Bulk Add...")
         bulk_add_action.triggered.connect(self._bulk_add_records)
         self.bulk_add_action = bulk_add_action  # Store reference for compact view
         toolbar.addAction(bulk_add_action)
 
         duplicate_record_action = QAction(self)
-        duplicate_record_action.setIcon(QIcon("assets/duplicate.png"))
+        duplicate_record_action.setIcon(QIcon(str(asset_path("duplicate.png"))))
         duplicate_record_action.setToolTip("Duplicate Record")
         duplicate_record_action.triggered.connect(self._duplicate_record)
         self.duplicate_record_action = duplicate_record_action  # Store reference for compact view
@@ -437,14 +437,14 @@ class MainWindow(QMainWindow):
 
         # Data actions
         import_action = QAction("Import", self)
-        import_action.setIcon(QIcon("assets/import.png"))
+        import_action.setIcon(QIcon(str(asset_path("import.png"))))
         import_action.triggered.connect(self._import_data)
         import_action.setEnabled(False)  # Disabled until collection selected
         self.import_action = import_action  # Store reference to enable/disable
         toolbar.addAction(import_action)
 
         export_action = QAction("Export", self)
-        export_action.setIcon(QIcon("assets/export.png"))
+        export_action.setIcon(QIcon(str(asset_path("export.png"))))
         export_action.triggered.connect(self._export_data)
         toolbar.addAction(export_action)
 
@@ -452,7 +452,7 @@ class MainWindow(QMainWindow):
 
         # Upload action (create new collection from CSV)
         upload_action = QAction("Upload", self)
-        upload_action.setIcon(QIcon("assets/upload.png"))
+        upload_action.setIcon(QIcon(str(asset_path("upload.png"))))
         upload_action.triggered.connect(self._upload_data)
         toolbar.addAction(upload_action)
 
@@ -460,7 +460,7 @@ class MainWindow(QMainWindow):
 
         # Join action (relational join)
         join_action = QAction(self)
-        join_action.setIcon(QIcon("assets/join.png"))
+        join_action.setIcon(QIcon(str(asset_path("join.png"))))
         join_action.setToolTip("Relational Join...")
         join_action.triggered.connect(self._show_join_dialog)
         join_action.setEnabled(False)  # Disabled until collection selected
@@ -473,7 +473,7 @@ class MainWindow(QMainWindow):
 
         # Lock/Unlock form toggle
         self.lock_form_action = QAction(self)
-        self.lock_form_action.setIcon(QIcon("assets/unlock.png"))
+        self.lock_form_action.setIcon(QIcon(str(asset_path("unlock.png"))))
         self.lock_form_action.setToolTip("Lock/Unlock Form (Toggle Readonly)")
         self.lock_form_action.setCheckable(True)
         self.lock_form_action.setChecked(False)  # Start unlocked
@@ -489,7 +489,7 @@ class MainWindow(QMainWindow):
 
         # Settings
         settings_action = QAction(self)
-        settings_action.setIcon(QIcon("assets/settings.png"))
+        settings_action.setIcon(QIcon(str(asset_path("settings.png"))))
         settings_action.setToolTip("Settings")
         settings_action.triggered.connect(self._show_settings)
         toolbar.addAction(settings_action)
@@ -638,7 +638,7 @@ class MainWindow(QMainWindow):
                     item.setIcon(QIcon(scaled_pixmap))
             else:
                 # Default icon (quartz crystal)
-                default_icon_path = Path(__file__).parent.parent.parent / "quartz.png"
+                default_icon_path = get_quartz_icon_path()
                 if default_icon_path.exists():
                     pixmap = QPixmap(str(default_icon_path))
                     if not pixmap.isNull():
@@ -1957,7 +1957,6 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
         from pathlib import Path
         import csv
-        import pandas as pd
         
         # Get CSV or Excel file
         file_path, _ = QFileDialog.getOpenFileName(
@@ -1992,24 +1991,36 @@ class MainWindow(QMainWindow):
             # Read CSV or Excel file
             file_path_obj = Path(file_path)
             file_ext = file_path_obj.suffix.lower()
-            try:
-                if file_ext in ('.xlsx', '.xls'):
-                    # Read Excel file
-                    df = pd.read_excel(file_path, engine='openpyxl' if file_ext == '.xlsx' else None)
-                else:
-                    # Read CSV file
-                    df = pd.read_csv(file_path)
-                csv_headers = df.columns.tolist()
-                csv_data = df.values.tolist()
-            except:
-                # Fallback to csv module for CSV files only
-                if file_ext not in ('.xlsx', '.xls'):
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        reader = csv.reader(f)
-                        csv_headers = next(reader)
-                        csv_data = [row for row in reader]
-                else:
-                    raise
+            
+            if file_ext in ('.xlsx', '.xls'):
+                # Read Excel file using openpyxl
+                try:
+                    from openpyxl import load_workbook
+                    wb = load_workbook(file_path, read_only=True, data_only=True)
+                    ws = wb.active
+                    
+                    # Get headers from first row
+                    header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+                    csv_headers = [str(cell) if cell is not None else f"Column_{i+1}" for i, cell in enumerate(header_row)]
+                    
+                    # Get all data rows
+                    csv_data = []
+                    for row in ws.iter_rows(min_row=2, values_only=True):
+                        row_data = [str(cell) if cell is not None else "" for cell in row]
+                        csv_data.append(row_data)
+                    
+                    wb.close()
+                except ImportError:
+                    QMessageBox.critical(self, "Error", "openpyxl is required for Excel files. Install it with: pip install openpyxl")
+                    store.close()
+                    self.workspace.delete_collection(collection_name, backup=False)
+                    return
+            else:
+                # Read CSV file using built-in csv module
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    reader = csv.reader(f)
+                    csv_headers = next(reader)
+                    csv_data = [row for row in reader]
             
             # Create fields from CSV headers
             fields_created = []
@@ -2067,10 +2078,10 @@ class MainWindow(QMainWindow):
         # Update icon (only if not in compact view)
         if not self.config.get("compact_view", False):
             if checked:
-                self.lock_form_action.setIcon(QIcon("assets/lock.png"))
+                self.lock_form_action.setIcon(QIcon(str(asset_path("lock.png"))))
                 self.lock_form_action.setToolTip("Unlock Form (Make Editable)")
             else:
-                self.lock_form_action.setIcon(QIcon("assets/unlock.png"))
+                self.lock_form_action.setIcon(QIcon(str(asset_path("unlock.png"))))
                 self.lock_form_action.setToolTip("Lock Form (Make Readonly)")
         
         # Update form view readonly state
@@ -2140,19 +2151,19 @@ class MainWindow(QMainWindow):
         # Restore icons when not in compact view
         if not compact:
             if hasattr(self, 'new_record_action'):
-                self.new_record_action.setIcon(QIcon("assets/add_row.png"))
+                self.new_record_action.setIcon(QIcon(str(asset_path("add_row.png"))))
             if hasattr(self, 'delete_record_action'):
-                self.delete_record_action.setIcon(QIcon("assets/delete_row.png"))
+                self.delete_record_action.setIcon(QIcon(str(asset_path("delete_row.png"))))
             if hasattr(self, 'add_field_action'):
-                self.add_field_action.setIcon(QIcon("assets/add_field.png"))
+                self.add_field_action.setIcon(QIcon(str(asset_path("add_field.png"))))
             if hasattr(self, 'delete_field_action'):
-                self.delete_field_action.setIcon(QIcon("assets/delete_field.png"))
+                self.delete_field_action.setIcon(QIcon(str(asset_path("delete_field.png"))))
             if hasattr(self, 'lock_form_action'):
                 # Restore icon based on state
                 if self.lock_form_action.isChecked():
-                    self.lock_form_action.setIcon(QIcon("assets/lock.png"))
+                    self.lock_form_action.setIcon(QIcon(str(asset_path("lock.png"))))
                 else:
-                    self.lock_form_action.setIcon(QIcon("assets/unlock.png"))
+                    self.lock_form_action.setIcon(QIcon(str(asset_path("unlock.png"))))
         
         # Hide separators that are adjacent to hidden buttons
         # Get list of actions to hide for separator logic

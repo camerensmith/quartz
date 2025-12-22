@@ -14,8 +14,8 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName('Quartz')
     app.setOrganizationName('Quartz')
-    from pathlib import Path
-    icon_path = Path(__file__).parent / 'quartz.png'
+    from src.core.resource_path import get_quartz_icon_path
+    icon_path = get_quartz_icon_path()
     if icon_path.exists():
         from PySide6.QtGui import QIcon
         app.setWindowIcon(QIcon(str(icon_path)))

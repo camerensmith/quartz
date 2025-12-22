@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-import pandas as pd
+# pandas removed - using csv module and openpyxl directly
 
 
 class ImportDialog(QDialog):
@@ -123,26 +123,40 @@ class ImportDialog(QDialog):
         try:
             file_ext = self.file_path.suffix.lower()
             if file_ext in ('.xlsx', '.xls'):
-                # Load Excel file
-                df = pd.read_excel(self.file_path, nrows=100, engine='openpyxl' if file_ext == '.xlsx' else None)
-                self.csv_headers = df.columns.tolist()
-                self.csv_data = df.values.tolist()
-            else:
-                # Load CSV file
+                # Load Excel file using openpyxl
                 try:
-                    df = pd.read_csv(self.file_path, nrows=100)  # Preview first 100 rows
-                    self.csv_headers = df.columns.tolist()
-                    self.csv_data = df.values.tolist()
-                except:
-                    # Fallback to csv module
-                    with open(self.file_path, 'r', encoding='utf-8') as f:
-                        reader = csv.reader(f)
-                        self.csv_headers = next(reader)
-                        self.csv_data = []
-                        for i, row in enumerate(reader):
-                            if i >= 100:  # Limit preview
-                                break
-                            self.csv_data.append(row)
+                    from openpyxl import load_workbook
+                    wb = load_workbook(self.file_path, read_only=True, data_only=True)
+                    ws = wb.active
+                    
+                    # Get headers from first row
+                    self.csv_headers = []
+                    first_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+                    for cell_value in first_row:
+                        self.csv_headers.append(str(cell_value) if cell_value is not None else "")
+                    
+                    # Get data (limit to 100 rows for preview)
+                    self.csv_data = []
+                    for i, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=1):
+                        if i > 100:  # Limit preview
+                            break
+                        row_data = [str(cell) if cell is not None else "" for cell in row]
+                        self.csv_data.append(row_data)
+                    
+                    wb.close()
+                except ImportError:
+                    QMessageBox.critical(self, "Error", "openpyxl is required for Excel files. Install it with: pip install openpyxl")
+                    return
+            else:
+                # Load CSV file using built-in csv module
+                with open(self.file_path, 'r', encoding='utf-8') as f:
+                    reader = csv.reader(f)
+                    self.csv_headers = next(reader)
+                    self.csv_data = []
+                    for i, row in enumerate(reader):
+                        if i >= 100:  # Limit preview
+                            break
+                        self.csv_data.append(row)
             
             self._populate_mapping_table()
         except Exception as e:
@@ -357,31 +371,56 @@ class ImportDialog(QDialog):
             
             file_ext = self.file_path.suffix.lower()
             if file_ext in ('.xlsx', '.xls'):
-                # Import from Excel
-                df = pd.read_excel(self.file_path, engine='openpyxl' if file_ext == '.xlsx' else None)
-                if not self.skip_first_row_check.isChecked():
-                    # First row is data, need to set column names
-                    df.columns = [f"Column_{i+1}" for i in range(len(df.columns))]
-                
-                for row_idx, row in df.iterrows():
-                    try:
-                        row_dict = row.to_dict()
-                        
-                        # Map to field keys
-                        record_data = {}
-                        for csv_col, field_key in mapping.items():
-                            value = row_dict.get(csv_col, "")
-                            if value and pd.notna(value):  # Check for NaN
-                                record_data[field_key] = str(value)
-                        
-                        # Add record
-                        if record_data:
-                            self.store.add_record(record_data)
-                            imported += 1
-                    except Exception as e:
-                        errors.append(f"Row {row_idx+1}: {str(e)}")
-                        if len(errors) >= 10:  # Limit error messages
-                            break
+                # Import from Excel using openpyxl
+                try:
+                    from openpyxl import load_workbook
+                    wb = load_workbook(self.file_path, read_only=True, data_only=True)
+                    ws = wb.active
+                    
+                    # Determine start row based on skip_first_row_check
+                    start_row = 2 if self.skip_first_row_check.isChecked() else 1
+                    
+                    # Get headers
+                    if self.skip_first_row_check.isChecked():
+                        # Headers from first row
+                        header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+                        excel_headers = [str(cell) if cell is not None else f"Column_{i+1}" for i, cell in enumerate(header_row)]
+                    else:
+                        # Generate column names
+                        first_data_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+                        excel_headers = [f"Column_{i+1}" for i in range(len(first_data_row))]
+                        start_row = 1
+                    
+                    # Import rows
+                    for row_idx, row in enumerate(ws.iter_rows(min_row=start_row, values_only=True), start=start_row):
+                        try:
+                            # Convert row to dict
+                            row_dict = {}
+                            for i, cell_value in enumerate(row):
+                                if i < len(excel_headers):
+                                    col_name = excel_headers[i]
+                                    row_dict[col_name] = str(cell_value) if cell_value is not None else ""
+                            
+                            # Map to field keys
+                            record_data = {}
+                            for csv_col, field_key in mapping.items():
+                                value = row_dict.get(csv_col, "")
+                                if value and value.strip():  # Check for empty/None
+                                    record_data[field_key] = value
+                            
+                            # Add record
+                            if record_data:
+                                self.store.add_record(record_data)
+                                imported += 1
+                        except Exception as e:
+                            errors.append(f"Row {row_idx}: {str(e)}")
+                            if len(errors) >= 10:  # Limit error messages
+                                break
+                    
+                    wb.close()
+                except ImportError:
+                    QMessageBox.critical(self, "Error", "openpyxl is required for Excel files. Install it with: pip install openpyxl")
+                    return
             else:
                 # Import from CSV
                 with open(self.file_path, 'r', encoding='utf-8') as f:
