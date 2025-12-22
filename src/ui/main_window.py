@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
 )
-from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtGui import QMouseEvent
+from PySide6.QtCore import Qt, Signal, QSize, QEvent
 from PySide6.QtGui import QAction, QIcon, QKeySequence, QPixmap
 
 from src.core.config import Config
@@ -27,6 +28,37 @@ from src.core.collection_store import CollectionStore
 from src.ui.table_view import TableView
 from src.ui.form_view import FormView
 from src.ui.styles import AppStyles
+from src.ui.advanced_search_dialog import AdvancedSearchDialog
+
+
+class CollectionsListWidget(QListWidget):
+    """Custom QListWidget that prevents selection on right-click"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._right_click_selected_row = -1
+    
+    def mousePressEvent(self, event: QMouseEvent):
+        """Override to prevent selection on right-click"""
+        if event.button() == Qt.RightButton:
+            # Store current selection before processing
+            current_item = self.currentItem()
+            if current_item:
+                self._right_click_selected_row = self.currentRow()
+            else:
+                self._right_click_selected_row = -1
+            
+            # Call parent to show context menu, but block selection
+            self.blockSignals(True)
+            super().mousePressEvent(event)
+            
+            # Immediately restore selection
+            if self._right_click_selected_row >= 0 and self._right_click_selected_row < self.count():
+                self.setCurrentRow(self._right_click_selected_row)
+            
+            self.blockSignals(False)
+        else:
+            super().mousePressEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -143,7 +175,7 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addLayout(sidebar_header)
 
-        self.collections_list = QListWidget()
+        self.collections_list = CollectionsListWidget()
         self.collections_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.collections_list.setIconSize(QSize(32, 32))  # Icon size for collections
         self.collections_list.customContextMenuRequested.connect(
@@ -152,6 +184,8 @@ class MainWindow(QMainWindow):
         self.collections_list.itemClicked.connect(self._on_collection_selected)
         # Handle clicks on empty space to deselect
         self.collections_list.itemSelectionChanged.connect(self._on_collection_selection_changed)
+        # Track if we're in a right-click to prevent selection changes
+        self._right_click_in_progress = False
         # Install event filter to detect clicks on empty space in collections list
         self.collections_list.installEventFilter(self)
         sidebar_layout.addWidget(self.collections_list)
@@ -248,6 +282,18 @@ class MainWindow(QMainWindow):
         self.search_box.textChanged.connect(self._on_search)
         self.search_box.setMinimumWidth(250)
         top_bar.addWidget(self.search_box)
+        
+        # Advanced search button
+        adv_icon_path = Path(__file__).parent.parent.parent / "assets" / "adv.png"
+        self.adv_search_btn = QPushButton()
+        if adv_icon_path.exists():
+            self.adv_search_btn.setIcon(QIcon(str(adv_icon_path)))
+        self.adv_search_btn.setProperty("class", "nav")
+        self.adv_search_btn.setToolTip("Advanced Search (SQL operators, search all collections)")
+        self.adv_search_btn.setFixedSize(20, 20)
+        self.adv_search_btn.setIconSize(QSize(16, 16))  # Slightly smaller than button to ensure it fits
+        self.adv_search_btn.clicked.connect(self._open_advanced_search)
+        top_bar.addWidget(self.adv_search_btn)
 
         right_layout.addWidget(self.top_bar_widget)
         
@@ -259,6 +305,22 @@ class MainWindow(QMainWindow):
 
         self.content_stack = QStackedWidget()
 
+        # Empty state placeholder (shown when no collection is selected)
+        self.empty_state_widget = QWidget()
+        empty_layout = QVBoxLayout(self.empty_state_widget)
+        empty_layout.setAlignment(Qt.AlignCenter)
+        empty_label = QLabel("Please select a collection or create new")
+        empty_label.setAlignment(Qt.AlignCenter)
+        empty_label.setStyleSheet("""
+            QLabel {
+                font-size: 18px;
+                color: #666;
+                padding: 40px;
+            }
+        """)
+        empty_layout.addWidget(empty_label)
+        self.content_stack.addWidget(self.empty_state_widget)
+
         # Table view
         self.table_view = TableView()
         self.content_stack.addWidget(self.table_view)
@@ -268,8 +330,8 @@ class MainWindow(QMainWindow):
         self.form_view.record_saved.connect(self._on_record_saved)
         self.content_stack.addWidget(self.form_view)
 
-        # Start with form view
-        self.content_stack.setCurrentIndex(1)
+        # Start with empty state
+        self.content_stack.setCurrentIndex(0)
 
         right_layout.addWidget(self.content_stack)
 
@@ -315,7 +377,8 @@ class MainWindow(QMainWindow):
         # Field actions
         add_field_action = QAction(self)
         add_field_action.setIcon(QIcon("assets/add_field.png"))
-        add_field_action.setToolTip("Add Field")
+        add_field_action.setToolTip("Add Field (Ctrl+G)")
+        add_field_action.setShortcut(QKeySequence("Ctrl+G"))
         add_field_action.triggered.connect(self._add_field)
         add_field_action.setEnabled(False)  # Disabled until collection selected
         self.add_field_action = add_field_action  # Store reference
@@ -523,6 +586,15 @@ class MainWindow(QMainWindow):
         show_key_action.triggered.connect(self._toggle_show_key)
         self.show_key_action = show_key_action
         view_menu.addAction(show_key_action)
+        
+        view_menu.addSeparator()
+        
+        expanded_view_action = QAction("Expanded View", self)
+        expanded_view_action.setCheckable(True)
+        expanded_view_action.setChecked(self.config.get("expanded_view", False))
+        expanded_view_action.triggered.connect(self._toggle_expanded_view)
+        self.expanded_view_action = expanded_view_action
+        view_menu.addAction(expanded_view_action)
 
         # Tools menu
         tools_menu = menubar.addMenu("Tools")
@@ -531,6 +603,22 @@ class MainWindow(QMainWindow):
         refresh_action.setShortcut(QKeySequence("F5"))
         refresh_action.triggered.connect(self._refresh_all)
         tools_menu.addAction(refresh_action)
+
+        tools_menu.addSeparator()
+
+        shortcuts_action = QAction("Shortcuts...", self)
+        shortcuts_action.triggered.connect(self._show_shortcuts)
+        tools_menu.addAction(shortcuts_action)
+
+        preferences_action = QAction("Preferences...", self)
+        preferences_action.triggered.connect(self._show_settings)
+        tools_menu.addAction(preferences_action)
+        
+        # Placeholder action for Ctrl+F (currently does nothing)
+        placeholder_action = QAction("Search (Placeholder)", self)
+        placeholder_action.setShortcut(QKeySequence("Ctrl+F"))
+        placeholder_action.setEnabled(False)  # Disabled as placeholder
+        tools_menu.addAction(placeholder_action)
 
     def _load_collections(self):
         """Load collections into sidebar"""
@@ -569,8 +657,22 @@ class MainWindow(QMainWindow):
 
         from PySide6.QtWidgets import QMenu
 
+        # Use the row stored by eventFilter if available, otherwise get current selection
+        if hasattr(self, '_right_click_selected_row') and self._right_click_selected_row >= 0:
+            selected_row = self._right_click_selected_row
+            current_item = self.collections_list.item(selected_row) if selected_row < self.collections_list.count() else None
+        else:
+            current_item = self.collections_list.currentItem()
+            selected_row = self.collections_list.currentRow() if current_item else -1
+        
+        clicked_collection_name = item.text()
+        was_currently_selected = (current_item and current_item.text() == clicked_collection_name)
+        
+        # Store the actual selected collection name for restoration
+        selected_collection_name = current_item.text() if current_item else None
+
         menu = QMenu(self)
-        collection_name = item.text()
+        collection_name = clicked_collection_name
 
         # Properties
         properties_action = menu.addAction("Properties...")
@@ -612,7 +714,31 @@ class MainWindow(QMainWindow):
         delete_action = menu.addAction("Delete...")
         delete_action.triggered.connect(lambda: self._delete_collection(collection_name))
 
+        # Block signals temporarily to prevent selection change from triggering events
+        self.collections_list.blockSignals(True)
+        
         menu.exec(self.collections_list.mapToGlobal(position))
+        
+        # Restore selection if Qt automatically selected a different collection on right-click
+        # Use row index for more reliable restoration
+        if not was_currently_selected and selected_row >= 0:
+            # Restore by row index (more reliable than item reference)
+            if selected_row < self.collections_list.count():
+                self.collections_list.setCurrentRow(selected_row)
+        elif not was_currently_selected and selected_collection_name:
+            # Fallback: Find the item by name
+            items = self.collections_list.findItems(selected_collection_name, Qt.MatchExactly)
+            if items:
+                self.collections_list.setCurrentItem(items[0])
+            elif current_item:
+                # Last resort: stored item reference
+                self.collections_list.setCurrentItem(current_item)
+        
+        # Unblock signals after restoring selection
+        self.collections_list.blockSignals(False)
+        
+        # Reset the stored row
+        self._right_click_selected_row = -1
 
     def _rename_collection(self, old_name: str):
         """Rename a collection"""
@@ -1159,6 +1285,14 @@ class MainWindow(QMainWindow):
     
     def _on_collection_selection_changed(self):
         """Handle collection selection changes (including deselection)"""
+        # If we're in a right-click, restore the original selection and don't process the change
+        if hasattr(self, '_right_click_in_progress') and self._right_click_in_progress:
+            if hasattr(self, '_right_click_selected_row') and self._right_click_selected_row >= 0 and self._right_click_selected_row < self.collections_list.count():
+                self.collections_list.blockSignals(True)
+                self.collections_list.setCurrentRow(self._right_click_selected_row)
+                self.collections_list.blockSignals(False)
+            return
+        
         # If no item is selected, deselect collection
         if not self.collections_list.currentItem():
             self._deselect_collection()
@@ -1174,6 +1308,9 @@ class MainWindow(QMainWindow):
         # Clear views
         self.table_view.model.set_collection(None, [])
         self.form_view.set_collection(None, [])
+        
+        # Show empty state
+        self.content_stack.setCurrentIndex(0)  # Empty state widget
         
         # Update UI
         self.setWindowTitle("Quartz")
@@ -1223,6 +1360,16 @@ class MainWindow(QMainWindow):
         fields = self.current_store.list_fields()
         self.table_view.set_collection(self.current_store, fields)
         self.form_view.set_collection(self.current_store, fields)
+        
+        # Switch to table or form view (not empty state)
+        # Index 1 = table view, Index 2 = form view
+        if hasattr(self, 'form_toggle') and self.form_toggle.isChecked():
+            self.content_stack.setCurrentIndex(2)  # Form view
+        else:
+            self.content_stack.setCurrentIndex(1)  # Table view
+        
+        # Apply table view settings
+        self._apply_table_view_settings()
         
         # Apply key column visibility setting
         show_key = self.config.get("show_key_column", True)
@@ -1274,10 +1421,18 @@ class MainWindow(QMainWindow):
                 self.form_view.load_record(record["id"])
 
     def _switch_to_view(self, index: int):
-        """Switch to Table (0) or Form (1) view"""
-        self.content_stack.setCurrentIndex(index)
+        """Switch to Table (0) or Form (1) view
+        Note: content_stack indices: 0=empty state, 1=table, 2=form
+        """
+        # Only switch if a collection is selected
+        if not self.current_store:
+            return
+        
+        # Map: 0 = table view (stack index 1), 1 = form view (stack index 2)
+        stack_index = index + 1  # 0 -> 1 (table), 1 -> 2 (form)
+        self.content_stack.setCurrentIndex(stack_index)
 
-        if index == 1:  # Form view
+        if index == 1:  # Form view (stack index 2)
             # Load selected record in form view
             selection = self.table_view.selectionModel().selectedRows()
             if selection:
@@ -1352,6 +1507,39 @@ class MainWindow(QMainWindow):
 
         # Update navigation
         self._update_navigation()
+    
+    def _open_advanced_search(self):
+        """Open advanced search dialog"""
+        dialog = AdvancedSearchDialog(self, self.workspace)
+        dialog.exec()
+    
+    def _open_collection_and_record(self, collection_name: str, record_id: int):
+        """Open a specific collection and navigate to a specific record"""
+        # Find and select the collection
+        items = self.collections_list.findItems(collection_name, Qt.MatchExactly)
+        if items:
+            self.collections_list.setCurrentItem(items[0])
+            self._open_collection(collection_name)
+            
+            # Wait a bit for collection to load, then select the record
+            from PySide6.QtCore import QTimer
+            timer = QTimer()
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda: self._select_record_by_id(record_id))
+            timer.start(100)  # 100ms delay
+    
+    def _select_record_by_id(self, record_id: int):
+        """Select a record by ID in the table view"""
+        if not self.current_store or not self.table_view:
+            return
+        
+        model = self.table_view.model
+        for row, record in enumerate(model.filtered_records):
+            if record.get("id") == record_id:
+                self.table_view.selectRow(row)
+                # Scroll to the row
+                self.table_view.scrollTo(model.index(row, 0))
+                break
 
     def _new_collection(self):
         """Create a new collection"""
@@ -1625,7 +1813,8 @@ class MainWindow(QMainWindow):
                     field_type=field_data["type"],
                     label=field_data["label"],
                     required=field_data.get("required", False),
-                    indexed=False  # Default to not indexed
+                    indexed=False,  # Default to not indexed
+                    options=field_data.get("options")  # Include options for select/dropdown fields
                 )
                 
                 # Handle image association if provided
@@ -1770,9 +1959,10 @@ class MainWindow(QMainWindow):
         import csv
         import pandas as pd
         
-        # Get CSV file
+        # Get CSV or Excel file
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Upload CSV to Create Collection", "", "CSV files (*.csv);;All files (*)"
+            self, "Upload CSV or Excel to Create Collection", "", 
+            "CSV files (*.csv);;Excel files (*.xlsx *.xls);;All files (*)"
         )
         if not file_path:
             return
@@ -1799,17 +1989,27 @@ class MainWindow(QMainWindow):
             store = CollectionStore(db_path)
             store.connect()
             
-            # Read CSV file
+            # Read CSV or Excel file
+            file_path_obj = Path(file_path)
+            file_ext = file_path_obj.suffix.lower()
             try:
-                df = pd.read_csv(file_path)
+                if file_ext in ('.xlsx', '.xls'):
+                    # Read Excel file
+                    df = pd.read_excel(file_path, engine='openpyxl' if file_ext == '.xlsx' else None)
+                else:
+                    # Read CSV file
+                    df = pd.read_csv(file_path)
                 csv_headers = df.columns.tolist()
                 csv_data = df.values.tolist()
             except:
-                # Fallback to csv module
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    reader = csv.reader(f)
-                    csv_headers = next(reader)
-                    csv_data = [row for row in reader]
+                # Fallback to csv module for CSV files only
+                if file_ext not in ('.xlsx', '.xls'):
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        reader = csv.reader(f)
+                        csv_headers = next(reader)
+                        csv_data = [row for row in reader]
+                else:
+                    raise
             
             # Create fields from CSV headers
             fields_created = []
@@ -2011,6 +2211,16 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'table_view') and self.table_view:
             self.table_view.setColumnHidden(0, not checked)
     
+    def _toggle_expanded_view(self, checked: bool):
+        """Toggle expanded view mode"""
+        self.config.set("expanded_view", checked)
+        # Apply table view settings to update view mode
+        self._apply_table_view_settings()
+        # Refresh the table if a collection is open
+        if self.current_store:
+            fields = self.current_store.list_fields()
+            self.table_view.set_collection(self.current_store, fields)
+    
     def _check_toolbar_overflow(self):
         """Check if toolbar has overflow and update overflow menu"""
         if not hasattr(self, 'overflow_button') or not hasattr(self, 'main_toolbar'):
@@ -2062,17 +2272,25 @@ class MainWindow(QMainWindow):
                         widget = btn
                         break
             
-            if widget and widget != overflow_widget and widget.isVisible():
-                # Get widget's position relative to toolbar
-                widget_rect = widget.geometry()
+            if widget and widget != overflow_widget:
+                # Reserve space for overflow button (40px to be safe)
+                overflow_button_width = 40
+                visible_threshold = toolbar_width - overflow_button_width
                 
-                # Check if widget extends beyond toolbar's visible width
-                # Use a threshold to account for the overflow button space (30px)
-                threshold = toolbar_width - 30
-                if widget_rect.right() > threshold:
-                    # This action is hidden/overflowing
+                # Check if widget is actually visible and if it extends beyond threshold
+                # A widget is hidden if its right edge is beyond the visible threshold
+                # OR if it's not visible at all (Qt might have hidden it)
+                if not widget.isVisible():
+                    # Widget is hidden by Qt's overflow mechanism
                     if action.text() or action.toolTip():
                         hidden_actions.append(action)
+                else:
+                    # Get widget's position relative to toolbar
+                    widget_rect = widget.geometry()
+                    if widget_rect.right() > visible_threshold:
+                        # Widget extends beyond visible area
+                        if action.text() or action.toolTip():
+                            hidden_actions.append(action)
         
         # Update overflow menu
         self.overflow_menu.clear()
@@ -2117,6 +2335,88 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'compact_view_action'):
             self.compact_view_action.setChecked(self.config.get("compact_view", False))
         self._update_compact_view()
+        
+        # Update expanded view
+        if hasattr(self, 'expanded_view_action'):
+            self.expanded_view_action.setChecked(self.config.get("expanded_view", False))
+        
+        # Apply table view settings
+        self._apply_table_view_settings()
+
+    def _apply_table_view_settings(self):
+        """Apply table view settings from config"""
+        if not hasattr(self, 'table_view') or not self.table_view:
+            return
+        
+        # Check if expanded view is enabled
+        expanded_view = self.config.get("expanded_view", False)
+        
+        if expanded_view:
+            # Expanded view: maximize everything to show all data
+            self.table_view.setWordWrap(True)  # Enable word wrap for text fields
+            # Set row height to auto-resize based on content
+            self.table_view.verticalHeader().setSectionResizeMode(
+                self.table_view.verticalHeader().ResizeMode.ResizeToContents
+            )
+            # Set column width to auto-resize based on content
+            self.table_view.horizontalHeader().setSectionResizeMode(
+                self.table_view.horizontalHeader().ResizeMode.ResizeToContents
+            )
+            # Resize columns to contents
+            self.table_view.resizeColumnsToContents()
+            # Set minimum row height to accommodate wrapped text and checkboxes
+            # Need at least 24px to fit checkbox (20px) + 2px padding on each side
+            self.table_view.verticalHeader().setMinimumSectionSize(24)
+        else:
+            # Normal view: apply configured settings
+            self.table_view.setWordWrap(False)  # Disable word wrap
+            # Set row height
+            row_height = self.config.get("table_row_height", 24)
+            self.table_view.verticalHeader().setDefaultSectionSize(row_height)
+            self.table_view.verticalHeader().setSectionResizeMode(
+                self.table_view.verticalHeader().ResizeMode.Fixed
+            )
+            # Apply to all existing rows
+            for row in range(self.table_view.model.rowCount()):
+                self.table_view.setRowHeight(row, row_height)
+            
+            # Apply default column width (for new columns)
+            col_width = self.config.get("column_width_default", 120)
+            # Set default width for horizontal header
+            self.table_view.horizontalHeader().setDefaultSectionSize(col_width)
+            self.table_view.horizontalHeader().setSectionResizeMode(
+                self.table_view.horizontalHeader().ResizeMode.Interactive
+            )
+            # Apply to columns that are smaller than default (but respect auto-sized larger columns)
+            for col in range(self.table_view.model.columnCount()):
+                current_width = self.table_view.columnWidth(col)
+                if col == 0:
+                    # Primary key column - keep at 60
+                    continue
+                if current_width < col_width:
+                    self.table_view.setColumnWidth(col, col_width)
+        
+        # Apply font size (always applies)
+        from PySide6.QtGui import QFont
+        font_size = self.config.get("font_size", 10)
+        font = self.table_view.font()
+        font.setPointSize(font_size)
+        self.table_view.setFont(font)
+        
+        # Ensure vertical header width is maintained (row numbers visibility)
+        self.table_view.verticalHeader().setFixedWidth(70)  # Ensure row numbers are visible
+        
+        # Also apply to form view
+        if hasattr(self, 'form_view') and self.form_view:
+            form_font = self.form_view.font()
+            form_font.setPointSize(font_size)
+            self.form_view.setFont(form_font)
+
+    def _show_shortcuts(self):
+        """Show keyboard shortcuts dialog"""
+        from src.ui.shortcuts_dialog import ShortcutsDialog
+        dialog = ShortcutsDialog(self)
+        dialog.exec()
 
     def _show_settings(self):
         """Show settings/preferences window"""
@@ -2126,6 +2426,8 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             # Reapply theme if it changed
             self._apply_theme()
+            # Apply table view settings
+            self._apply_table_view_settings()
             # Refresh views to apply appearance changes
             if self.current_store:
                 fields = self.current_store.list_fields()
@@ -2467,6 +2769,8 @@ class MainWindow(QMainWindow):
         """Handle record saved from form view"""
         # Refresh table view
         self.table_view.model._refresh_data()
+        # Update navigation counter
+        self._update_navigation()
     
     def eventFilter(self, obj, event):
         """Event filter to detect clicks on empty space in top bar and collections list"""
@@ -2486,9 +2790,38 @@ class MainWindow(QMainWindow):
                         self.collections_list.clearSelection()
                     return True
         
-        # Handle mouse press on collections list (for clicks on empty space)
+        # Handle mouse press on collections list (for clicks on empty space and right-clicks)
         if hasattr(self, 'collections_list') and obj == self.collections_list and event.type() == QEvent.MouseButtonPress:
-            if isinstance(event, QMouseEvent) and event.button() == Qt.LeftButton:
+            if isinstance(event, QMouseEvent) and event.button() == Qt.RightButton:
+                # Store current selection BEFORE Qt processes the right-click
+                current_item = self.collections_list.currentItem()
+                if current_item:
+                    self._right_click_selected_row = self.collections_list.currentRow()
+                else:
+                    self._right_click_selected_row = -1
+                
+                # Block signals IMMEDIATELY to prevent selection change
+                self.collections_list.blockSignals(True)
+                self._right_click_in_progress = True
+                
+                # Restore selection multiple times to ensure it sticks
+                # First restore immediately (before Qt processes)
+                if self._right_click_selected_row >= 0 and self._right_click_selected_row < self.collections_list.count():
+                    self.collections_list.setCurrentRow(self._right_click_selected_row)
+                
+                # Then restore again after Qt processes the event
+                from PySide6.QtCore import QTimer
+                def restore_selection():
+                    if hasattr(self, '_right_click_selected_row') and self._right_click_selected_row >= 0:
+                        if self._right_click_selected_row < self.collections_list.count():
+                            self.collections_list.setCurrentRow(self._right_click_selected_row)
+                    self.collections_list.blockSignals(False)
+                    self._right_click_in_progress = False
+                
+                # Use multiple timers to ensure restoration happens
+                QTimer.singleShot(0, restore_selection)
+                QTimer.singleShot(10, restore_selection)  # Backup restoration
+            elif isinstance(event, QMouseEvent) and event.button() == Qt.LeftButton:
                 # Check if click is on an item
                 item = self.collections_list.itemAt(event.pos())
                 if item is None:
@@ -2511,7 +2844,7 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         # Check overflow after window is shown
         from PySide6.QtCore import QTimer
-        QTimer.singleShot(200, self._check_toolbar_overflow)
+        QTimer.singleShot(300, self._check_toolbar_overflow)
     
     def closeEvent(self, event):
         """Handle window close"""

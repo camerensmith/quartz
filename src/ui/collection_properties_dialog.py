@@ -124,7 +124,7 @@ class CollectionPropertiesDialog(QDialog):
             
             # Type
             type_combo = QComboBox()
-            type_combo.addItems(["text", "notes", "integer", "decimal", "checkbox", "date", "datetime", "select"])
+            type_combo.addItems(["text", "notes", "integer", "decimal", "checkbox", "date", "datetime", "select", "dropdown"])
             type_combo.setCurrentText(field["type"])
             self.fields_table.setCellWidget(row, 2, type_combo)
             

@@ -211,6 +211,12 @@ QHeaderView::section {{
     font-size: 12px;
 }}
 
+/* Vertical header (row numbers) - reduce padding to prevent cutoff */
+QHeaderView::section:vertical {{
+    padding: 4px 8px;
+    min-width: 70px;
+}}
+
 QHeaderView::section:hover {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f0f0f0, stop:1 {colors['primary_lighter']});
 }}
@@ -272,10 +278,10 @@ QCheckBox {{
 }}
 
 QCheckBox::indicator {{
-    width: 18px;
-    height: 18px;
+    width: 20px;
+    height: 20px;
     border: 2px solid #757575;
-    border-radius: 3px;
+    border-radius: 4px;
     background-color: #ffffff;
 }}
 
@@ -284,15 +290,15 @@ QCheckBox::indicator:hover {{
 }}
 
 QCheckBox::indicator:checked {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {colors['primary']}, stop:1 {colors['primary_dark']});
+    background-color: {colors['primary']};
     border-color: {colors['primary']};
     image: none;
 }}
 
-QCheckBox::indicator:checked::after {{
-    content: "✓";
-    color: white;
-    font-weight: bold;
+QCheckBox::indicator:unchecked {{
+    background-color: #ffffff;
+    border-color: #757575;
+    image: none;
 }}
 
 /* Search Box */
@@ -322,6 +328,29 @@ QPushButton[class="toggle"]:checked {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {colors['primary']}, stop:1 {colors['primary_dark']});
     color: white;
     border: 1px solid {colors['primary']};
+}}
+
+/* Menus */
+QMenu {{
+    background-color: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 4px;
+}}
+
+QMenu::item {{
+    padding: 6px 24px 6px 28px;
+    border-radius: 3px;
+}}
+
+QMenu::item:selected {{
+    background-color: rgba({primary_rgb[0]}, {primary_rgb[1]}, {primary_rgb[2]}, 0.1);
+}}
+
+QMenu::indicator {{
+    width: 16px;
+    height: 16px;
+    left: 6px;
 }}
 
 /* Dialogs */
@@ -614,6 +643,12 @@ QHeaderView::section {{
     font-size: 12px;
 }}
 
+/* Vertical header (row numbers) - reduce padding to prevent cutoff */
+QHeaderView::section:vertical {{
+    padding: 4px 8px;
+    min-width: 70px;
+}}
+
 QHeaderView::section:hover {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3e3e42, stop:1 {colors['primary_dark']});
 }}
@@ -678,10 +713,10 @@ QCheckBox {{
 }}
 
 QCheckBox::indicator {{
-    width: 18px;
-    height: 18px;
+    width: 20px;
+    height: 20px;
     border: 2px solid #6e6e6e;
-    border-radius: 3px;
+    border-radius: 4px;
     background-color: #252526;
 }}
 
@@ -690,8 +725,14 @@ QCheckBox::indicator:hover {{
 }}
 
 QCheckBox::indicator:checked {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {colors['primary']}, stop:1 {colors['primary_dark']});
+    background-color: {colors['primary']};
     border-color: {colors['primary']};
+    image: none;
+}}
+
+QCheckBox::indicator:unchecked {{
+    background-color: #252526;
+    border-color: #6e6e6e;
     image: none;
 }}
 
@@ -723,6 +764,31 @@ QPushButton[class="toggle"]:checked {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {colors['primary']}, stop:1 {colors['primary_dark']});
     color: white;
     border: 1px solid {colors['primary']};
+}}
+
+/* Menus */
+QMenu {{
+    background-color: #252526;
+    border: 1px solid #3e3e42;
+    border-radius: 4px;
+    padding: 4px;
+    color: #cccccc;
+}}
+
+QMenu::item {{
+    padding: 6px 24px 6px 28px;
+    border-radius: 3px;
+    color: #cccccc;
+}}
+
+QMenu::item:selected {{
+    background-color: rgba({primary_rgb[0]}, {primary_rgb[1]}, {primary_rgb[2]}, 0.2);
+}}
+
+QMenu::indicator {{
+    width: 16px;
+    height: 16px;
+    left: 6px;
 }}
 
 /* Dialogs */

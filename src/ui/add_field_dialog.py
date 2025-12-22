@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QComboBox, QCheckBox, QFileDialog, QMessageBox, QGroupBox
+    QComboBox, QCheckBox, QFileDialog, QMessageBox, QGroupBox, QTextEdit
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
@@ -63,9 +63,23 @@ class AddFieldDialog(QDialog):
         type_layout = QHBoxLayout()
         type_layout.addWidget(QLabel("Type:"))
         self.type_combo = QComboBox()
-        self.type_combo.addItems(["text", "notes", "integer", "decimal", "checkbox", "date", "datetime", "select"])
+        self.type_combo.addItems(["text", "notes", "integer", "decimal", "checkbox", "date", "datetime", "select", "dropdown"])
+        self.type_combo.currentTextChanged.connect(self._on_type_changed)
         type_layout.addWidget(self.type_combo)
         layout.addLayout(type_layout)
+        
+        # Options (for select and dropdown types)
+        self.options_group = QGroupBox("Dropdown Options")
+        options_layout = QVBoxLayout()
+        options_layout.addWidget(QLabel("Enter options (one per line):"))
+        self.options_input = QTextEdit()
+        self.options_input.setPlaceholderText("Option 1\nOption 2\nOption 3")
+        self.options_input.setMaximumHeight(100)
+        self.options_input.setVisible(False)  # Hidden by default
+        options_layout.addWidget(self.options_input)
+        self.options_group.setLayout(options_layout)
+        self.options_group.setVisible(False)  # Hidden by default
+        layout.addWidget(self.options_group)
         
         # Required
         self.required_check = QCheckBox("Required")
@@ -116,6 +130,15 @@ class AddFieldDialog(QDialog):
             if key and not key[0].isdigit():
                 self.key_input.setText(key)
     
+    def _on_type_changed(self, field_type: str):
+        """Show/hide options input based on field type"""
+        if field_type in ("select", "dropdown"):
+            self.options_group.setVisible(True)
+            self.options_input.setVisible(True)
+        else:
+            self.options_group.setVisible(False)
+            self.options_input.setVisible(False)
+    
     def _browse_image(self):
         """Browse for image file"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -144,12 +167,23 @@ class AddFieldDialog(QDialog):
             QMessageBox.warning(self, "Validation", "Field key must start with a letter or underscore")
             return
         
+        field_type = self.type_combo.currentText()
+        
+        # Parse options for select and dropdown types
+        options = []
+        if field_type in ("select", "dropdown"):
+            options_text = self.options_input.toPlainText().strip()
+            if options_text:
+                # Split by newlines and filter out empty lines
+                options = [opt.strip() for opt in options_text.split("\n") if opt.strip()]
+        
         self.field_data = {
             "key": key,
             "label": label,
-            "type": self.type_combo.currentText(),
+            "type": field_type,
             "required": self.required_check.isChecked(),
-            "image_path": self.image_path_input.text().strip() or None
+            "image_path": self.image_path_input.text().strip() or None,
+            "options": options if options else None  # Only include if there are options
         }
         
         self.accept()

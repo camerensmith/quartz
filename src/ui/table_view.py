@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QAbstractItemDelegate,
 )
-from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, Signal
+from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, Signal, QDate, QDateTime
 from PySide6.QtGui import QKeySequence, QShortcut, QIcon, QKeyEvent
 
 from src.core.collection_store import CollectionStore
@@ -28,6 +28,28 @@ class RecordsTableModel(QAbstractTableModel):
         self.records: List[Dict] = []
         self.filtered_records: List[Dict] = []
         self._readonly = False  # Track readonly state
+    
+    def _get_date_format(self) -> str:
+        """Get date format from config"""
+        # Try to find config through parent chain
+        parent = self.parent()
+        while parent:
+            if hasattr(parent, 'config'):
+                return parent.config.get("date_format", "yyyy-MM-dd")
+            parent = parent.parent() if hasattr(parent, 'parent') else None
+        # Default if config not found
+        return "yyyy-MM-dd"
+    
+    def _get_datetime_format(self) -> str:
+        """Get datetime format from config"""
+        # Try to find config through parent chain
+        parent = self.parent()
+        while parent:
+            if hasattr(parent, 'config'):
+                return parent.config.get("datetime_format", "yyyy-MM-dd HH:mm:ss")
+            parent = parent.parent() if hasattr(parent, 'parent') else None
+        # Default if config not found
+        return "yyyy-MM-dd HH:mm:ss"
 
     def set_collection(self, store: Optional[CollectionStore], fields: List[Dict]):
         """Set the collection to display"""
@@ -109,11 +131,41 @@ class RecordsTableModel(QAbstractTableModel):
         record = self.filtered_records[row]
         field = self.fields[col - 1]  # Adjust for primary key column
         field_key = field["key"]
+        field_type = field.get("type", "text")
 
         if role == Qt.DisplayRole or role == Qt.EditRole:
             value = record.get(field_key)
             if value is None:
                 return ""
+            
+            # Format date/datetime values according to user preferences
+            if field_type == "date":
+                try:
+                    from datetime import datetime
+                    if isinstance(value, str):
+                        dt = datetime.fromisoformat(value)
+                    else:
+                        dt = value
+                    date = QDate(dt.year, dt.month, dt.day)
+                    # Get date format from config
+                    date_format = self._get_date_format()
+                    return date.toString(date_format) if date_format else str(value)
+                except (ValueError, TypeError, AttributeError):
+                    return str(value)
+            elif field_type == "datetime":
+                try:
+                    from datetime import datetime
+                    if isinstance(value, str):
+                        dt = datetime.fromisoformat(value)
+                    else:
+                        dt = value
+                    qdt = QDateTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
+                    # Get datetime format from config
+                    datetime_format = self._get_datetime_format()
+                    return qdt.toString(datetime_format) if datetime_format else str(value)
+                except (ValueError, TypeError, AttributeError):
+                    return str(value)
+            
             return str(value)
 
         return None
@@ -142,12 +194,17 @@ class RecordsTableModel(QAbstractTableModel):
                 record["id"] = new_id
                 self.dataChanged.emit(index, index, [role])
                 # Show warning that ID change won't persist
-                parent = self.parent()
-                if parent:
-                    QToolTip.showText(
-                        parent.mapToGlobal(index.rect().topLeft()),
-                        "Note: Primary key changes are display-only and won't be saved to database"
-                    )
+                # Get the view to access the visual rect
+                view = self.parent()  # self.parent() is the TableView
+                if view:
+                    # Get the visual rect from the view
+                    visual_rect = view.visualRect(index)
+                    if visual_rect.isValid():
+                        global_pos = view.mapToGlobal(visual_rect.topLeft())
+                        QToolTip.showText(
+                            global_pos,
+                            "Note: Primary key changes are display-only and won't be saved to database"
+                        )
                 return True
             except (ValueError, TypeError):
                 return False
@@ -168,11 +225,13 @@ class RecordsTableModel(QAbstractTableModel):
         if not validation_result.valid:
             # Show error tooltip
             error_msg = validation_result.error_message or "Invalid value"
-            parent = self.parent()
-            if parent:
-                QToolTip.showText(
-                    parent.mapToGlobal(index.rect().topLeft()), error_msg
-                )
+            view = self.parent()  # self.parent() is the TableView
+            if view:
+                # Get the visual rect from the view
+                visual_rect = view.visualRect(index)
+                if visual_rect.isValid():
+                    global_pos = view.mapToGlobal(visual_rect.topLeft())
+                    QToolTip.showText(global_pos, error_msg)
             # Mark cell as having error (for visual feedback)
             if parent and hasattr(parent, "error_delegate"):
                 parent.error_delegate.set_error(row, col, error_msg)
@@ -230,6 +289,11 @@ class RecordsTableModel(QAbstractTableModel):
                 parent.error_delegate.clear_error(row, col)
 
         self.dataChanged.emit(index, index, [role])
+        
+        # Notify main window to update navigation counter
+        if main_window:
+            main_window._update_navigation()
+        
         return True
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlags:
@@ -239,6 +303,71 @@ class RecordsTableModel(QAbstractTableModel):
             if not self._readonly:
                 flags |= Qt.ItemIsEditable
         return flags
+    
+    def sort(self, column: int, order: Qt.SortOrder = Qt.AscendingOrder):
+        """Sort the model by column"""
+        if not self.filtered_records:
+            return
+        
+        # Determine sort key function based on column
+        if column == 0:
+            # Sort by primary key (ID)
+            key_func = lambda r: r.get("id", 0)
+        else:
+            # Sort by field value
+            field_index = column - 1  # Adjust for primary key column
+            if field_index >= len(self.fields):
+                return
+            
+            field = self.fields[field_index]
+            field_key = field["key"]
+            field_type = field.get("type", "text")
+            
+            def key_func(record):
+                value = record.get(field_key)
+                
+                # Handle different field types for proper sorting
+                if field_type == "integer":
+                    if value is None:
+                        return 0 if order == Qt.AscendingOrder else float('inf')
+                    try:
+                        return int(value)
+                    except (ValueError, TypeError):
+                        return 0
+                elif field_type == "decimal":
+                    if value is None:
+                        return 0.0 if order == Qt.AscendingOrder else float('inf')
+                    try:
+                        return float(value)
+                    except (ValueError, TypeError):
+                        return 0.0
+                elif field_type == "checkbox":
+                    # Normalize checkbox values to boolean for consistent sorting
+                    if value is None:
+                        return False  # None/null treated as False
+                    if isinstance(value, bool):
+                        return value
+                    # Convert string values to boolean
+                    value_str = str(value).lower().strip()
+                    return value_str in ("true", "1", "yes", "on")
+                elif field_type in ("date", "datetime"):
+                    # Sort dates as strings (ISO format sorts correctly)
+                    if value is None:
+                        return "" if order == Qt.AscendingOrder else "zzz"
+                    return str(value)
+                else:
+                    # Text, notes, dropdown, etc. - sort as string
+                    if value is None:
+                        return "" if order == Qt.AscendingOrder else "zzz"
+                    return str(value).lower()
+        
+        # Sort the filtered records
+        self.layoutAboutToBeChanged.emit()
+        
+        reverse = (order == Qt.DescendingOrder)
+        self.filtered_records.sort(key=key_func, reverse=reverse)
+        
+        self.layoutChanged.emit()
     
     def set_readonly(self, readonly: bool):
         """Set model readonly state"""
@@ -265,6 +394,16 @@ class TableView(QTableView):
         
         # Enable column reordering
         self.horizontalHeader().setSectionsMovable(True)
+        
+        # Configure vertical header (row numbers) to be visible
+        self.verticalHeader().setVisible(True)  # Ensure it's visible
+        self.verticalHeader().setDefaultSectionSize(24)
+        self.verticalHeader().setMinimumSectionSize(20)  # Minimum to show row numbers
+        self.verticalHeader().setDefaultAlignment(Qt.AlignCenter)  # Center row numbers
+        # Set fixed width for vertical header to show row numbers properly
+        # Fixed width ensures it's always visible and not cut off
+        # Use larger width to account for padding (8px on each side) and text width
+        self.verticalHeader().setFixedWidth(70)  # Width for row numbers with padding (e.g., "1000")
 
         # Enable inline editing - Tab navigation and typing handled in keyPressEvent
         self.setEditTriggers(
@@ -304,6 +443,16 @@ class TableView(QTableView):
         # Set primary key column width (first column)
         self.setColumnWidth(0, 60)  # Fixed width for ID column
         
+        # Get default column width from config if available
+        default_col_width = 120  # Default fallback
+        if hasattr(self, 'parent') and self.parent():
+            # Try to find main window to get config
+            parent = self.parent()
+            while parent and not hasattr(parent, 'config'):
+                parent = parent.parent()
+            if parent and hasattr(parent, 'config'):
+                default_col_width = parent.config.get("column_width_default", 120)
+        
         # Auto-resize columns to content with min/max constraints
         self.resizeColumnsToContents()
         # Set minimum and maximum widths for columns (skip primary key column)
@@ -317,6 +466,9 @@ class TableView(QTableView):
                 self.setColumnWidth(col, min_width)
             elif current_width > max_width:
                 self.setColumnWidth(col, max_width)
+            elif current_width < default_col_width:
+                # If column is smaller than default, use default
+                self.setColumnWidth(col, default_col_width)
             else:
                 # Keep auto-sized width
                 pass
@@ -386,16 +538,27 @@ class TableView(QTableView):
         index = self.indexAt(position)
         is_row_click = index.isValid() and index.row() >= 0
         
+        # Store current selection to restore it if Qt changes it
+        if self.selectionModel():
+            current_selection = self.selectionModel().selection()
+            clicked_row_was_selected = False
+            if is_row_click:
+                clicked_row_was_selected = any(idx.row() == index.row() for idx in current_selection.indexes())
+        else:
+            current_selection = None
+            clicked_row_was_selected = False
+        
         menu = QMenu(self)
         
         if is_row_click:
+            row = index.row()
             # Duplicate Row option (when clicking on a row)
             duplicate_row_action = menu.addAction("Duplicate Row")
-            duplicate_row_action.triggered.connect(lambda: self._duplicate_row_via_context(index.row()))
+            duplicate_row_action.triggered.connect(lambda: self._duplicate_row_via_context(row))
             
             # Delete Row option (when clicking on a row)
             delete_row_action = menu.addAction("Delete Row")
-            delete_row_action.triggered.connect(lambda: self._delete_row_via_context(index.row()))
+            delete_row_action.triggered.connect(lambda: self._delete_row_via_context(row))
             menu.addSeparator()
         
         # Add Row option (always available)
@@ -409,6 +572,15 @@ class TableView(QTableView):
             show_key_action.triggered.connect(lambda: self.setColumnHidden(0, False))
         
         menu.exec(self.mapToGlobal(position))
+        
+        # Restore selection if Qt automatically selected a row that wasn't selected before
+        if current_selection and self.selectionModel() and is_row_click and not clicked_row_was_selected:
+            new_selection = self.selectionModel().selection()
+            # Check if the clicked row is now selected
+            clicked_row_now_selected = any(idx.row() == index.row() for idx in new_selection.indexes())
+            if clicked_row_now_selected:
+                # Restore the previous selection (without the clicked row)
+                self.selectionModel().select(current_selection, self.selectionModel().ClearAndSelect)
     
     def keyPressEvent(self, event: QKeyEvent):
         """Handle keyboard input for tab navigation and typing"""
@@ -573,8 +745,11 @@ class TableView(QTableView):
             parent = parent.parent()
         
         if parent and hasattr(parent, "_duplicate_record"):
-            # Select the row first
-            self.selectRow(row)
+            # Only select the row if it's not already selected
+            # This prevents unwanted selection changes when right-clicking
+            selected_rows = [idx.row() for idx in self.selectedIndexes()]
+            if row not in selected_rows:
+                self.selectRow(row)
             parent._duplicate_record()
     
     def _delete_row_via_context(self, row: int):
@@ -585,8 +760,11 @@ class TableView(QTableView):
             parent = parent.parent()
         
         if parent and hasattr(parent, "_delete_record"):
-            # Select the row first
-            self.selectRow(row)
+            # Only select the row if it's not already selected
+            # This prevents unwanted selection changes when right-clicking
+            selected_rows = [idx.row() for idx in self.selectedIndexes()]
+            if row not in selected_rows:
+                self.selectRow(row)
             parent._delete_record()
 
     def _remove_field(self, field_key: str, field_label: str):

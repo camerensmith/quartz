@@ -128,27 +128,80 @@ class ExportService:
             print(f"Export error: {e}")
             return False
     
+    def export_excel(self, file_path: Path, record_ids: Optional[List[int]] = None,
+                     include_headers: bool = True) -> bool:
+        """Export records to Excel (.xlsx)"""
+        try:
+            import pandas as pd
+            
+            fields = self.store.list_fields()
+            field_keys = [f["key"] for f in fields]
+            field_labels = [f["label"] for f in fields]
+            
+            # Get records
+            if record_ids:
+                records = [self.store.get_record(rid) for rid in record_ids]
+                records = [r for r in records if r]  # Filter None
+            else:
+                records = self.store.list_records()
+            
+            # Prepare data for DataFrame
+            data = []
+            for record in records:
+                row = []
+                for field_key, field in zip(field_keys, fields):
+                    value = record.get(field_key, "")
+                    # Format value based on field type
+                    value = self._format_value_for_export(field, value)
+                    row.append(value)
+                data.append(row)
+            
+            # Create DataFrame
+            df = pd.DataFrame(data, columns=field_labels if include_headers else None)
+            
+            # Write to Excel
+            df.to_excel(file_path, index=False, header=include_headers, engine='openpyxl')
+            
+            return True
+        except ImportError:
+            print("openpyxl not installed. Install it with: pip install openpyxl")
+            return False
+        except Exception as e:
+            print(f"Export error: {e}")
+            return False
+    
     def _format_value_for_csv(self, field: Dict, value: Any) -> str:
         """Format value for CSV export based on field type"""
+        return str(self._format_value_for_export(field, value))
+    
+    def _format_value_for_export(self, field: Dict, value: Any) -> Any:
+        """Format value for export (CSV/Excel) based on field type"""
         if value is None or value == "":
             return ""
         
         field_type = field.get("type", "text")
         
         if field_type == "checkbox":
-            # Convert to true/false
+            # Convert to boolean for Excel, string for CSV
             if isinstance(value, bool):
-                return "true" if value else "false"
+                return value
             value_str = str(value).lower()
-            if value_str in ("true", "1", "yes", "on"):
-                return "true"
-            return "false"
+            return value_str in ("true", "1", "yes", "on")
         elif field_type in ("date", "datetime"):
             # Keep ISO format
             return str(value)
-        elif field_type in ("integer", "decimal"):
-            # Keep numeric format
-            return str(value)
+        elif field_type == "integer":
+            # Convert to int if possible
+            try:
+                return int(value) if value else ""
+            except (ValueError, TypeError):
+                return str(value)
+        elif field_type == "decimal":
+            # Convert to float if possible
+            try:
+                return float(value) if value else ""
+            except (ValueError, TypeError):
+                return str(value)
         
         # Default: return as string
         return str(value)

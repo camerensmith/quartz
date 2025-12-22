@@ -50,7 +50,10 @@ class Config:
             "shortcuts": {},
             "compact_view": False,
             "visible_collection_panel": True,
-            "show_key_column": True
+            "show_key_column": True,
+            "expanded_view": False,
+            "date_format": "yyyy-MM-dd",  # Default ISO date format
+            "datetime_format": "yyyy-MM-dd HH:mm:ss",  # Default ISO datetime format
         }
     
     def save(self):

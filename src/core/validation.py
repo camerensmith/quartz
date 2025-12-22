@@ -50,7 +50,7 @@ class FieldValidator:
             return FieldValidator.validate_date(value)
         elif field_type == "datetime":
             return FieldValidator.validate_datetime(value)
-        elif field_type in ("select", "single-select"):
+        elif field_type in ("select", "single-select", "dropdown"):
             return FieldValidator.validate_select(field, value)
         elif field_type == "text":
             return FieldValidator.validate_text(field, value)

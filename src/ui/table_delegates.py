@@ -4,7 +4,8 @@ from typing import Any, Optional
 
 from PySide6.QtWidgets import (
     QStyledItemDelegate, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
-    QComboBox, QDateEdit, QDateTimeEdit, QWidget, QStyleOptionButton, QApplication, QStyle
+    QComboBox, QDateEdit, QDateTimeEdit, QWidget, QStyleOptionButton, QApplication, QStyle,
+    QCalendarWidget
 )
 from PySide6.QtCore import Qt, QModelIndex, QDate, QDateTime, QAbstractItemModel, QEvent
 from PySide6.QtGui import QColor, QPainter
@@ -17,6 +18,28 @@ class FieldTypeDelegate(QStyledItemDelegate):
         super().__init__(parent)
         self.field = field
         self.field_type = field.get("type", "text")
+    
+    def _get_date_format(self) -> str:
+        """Get date format from config"""
+        # Try to find config through parent chain
+        parent = self.parent()
+        while parent:
+            if hasattr(parent, 'config'):
+                return parent.config.get("date_format", "yyyy-MM-dd")
+            parent = parent.parent() if hasattr(parent, 'parent') else None
+        # Default if config not found
+        return "yyyy-MM-dd"
+    
+    def _get_datetime_format(self) -> str:
+        """Get datetime format from config"""
+        # Try to find config through parent chain
+        parent = self.parent()
+        while parent:
+            if hasattr(parent, 'config'):
+                return parent.config.get("datetime_format", "yyyy-MM-dd HH:mm:ss")
+            parent = parent.parent() if hasattr(parent, 'parent') else None
+        # Default if config not found
+        return "yyyy-MM-dd HH:mm:ss"
     
     def createEditor(self, parent: QWidget, option, index: QModelIndex) -> QWidget:
         """Create appropriate editor based on field type"""
@@ -53,11 +76,12 @@ class FieldTypeDelegate(QStyledItemDelegate):
             calendar = editor.calendarWidget()
             if calendar:
                 calendar.setFirstDayOfWeek(Qt.DayOfWeek.Monday)
-                # Use ShortDayNames format (3-character abbreviations) and ensure header is wide enough
+                # Use ShortDayNames format (3-character abbreviations)
                 calendar.setHorizontalHeaderFormat(QCalendarWidget.HorizontalHeaderFormat.ShortDayNames)
-                # Set minimum section size for horizontal header to show full day names
-                calendar.horizontalHeader().setMinimumSectionSize(45)
-                calendar.horizontalHeader().setDefaultSectionSize(45)
+            # Apply date format from config
+            date_format = self._get_date_format()
+            if date_format:
+                editor.setDisplayFormat(date_format)
             return editor
         
         elif self.field_type == "datetime":
@@ -68,14 +92,15 @@ class FieldTypeDelegate(QStyledItemDelegate):
             calendar = editor.calendarWidget()
             if calendar:
                 calendar.setFirstDayOfWeek(Qt.DayOfWeek.Monday)
-                # Use ShortDayNames format (3-character abbreviations) and ensure header is wide enough
+                # Use ShortDayNames format (3-character abbreviations)
                 calendar.setHorizontalHeaderFormat(QCalendarWidget.HorizontalHeaderFormat.ShortDayNames)
-                # Set minimum section size for horizontal header to show full day names
-                calendar.horizontalHeader().setMinimumSectionSize(45)
-                calendar.horizontalHeader().setDefaultSectionSize(45)
+            # Apply datetime format from config
+            datetime_format = self._get_datetime_format()
+            if datetime_format:
+                editor.setDisplayFormat(datetime_format)
             return editor
         
-        elif self.field_type in ("select", "single-select"):
+        elif self.field_type in ("select", "single-select", "dropdown"):
             editor = QComboBox(parent)
             options = self.field.get("options", [])
             if isinstance(options, str):
@@ -284,6 +309,8 @@ class FieldTypeDelegate(QStyledItemDelegate):
     def paint(self, painter: QPainter, option, index: QModelIndex):
         """Custom paint for checkbox fields"""
         if self.field_type == "checkbox":
+            from PySide6.QtGui import QPainter
+            
             value = index.model().data(index, Qt.DisplayRole)
             checked = False
             
@@ -294,10 +321,20 @@ class FieldTypeDelegate(QStyledItemDelegate):
             else:
                 checked = bool(value)
             
-            # Draw checkbox
-            checkbox_rect = option.rect
-            checkbox_rect.setWidth(20)
-            checkbox_rect.moveLeft(option.rect.left() + (option.rect.width() - 20) // 2)
+            # Enable anti-aliasing for smoother rendering
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            
+            # Draw checkbox - ensure it fits within cell bounds
+            cell_rect = option.rect
+            checkbox_size = min(20, min(cell_rect.width() - 4, cell_rect.height() - 4))  # Leave 2px padding on each side
+            checkbox_size = max(16, checkbox_size)  # Minimum 16px for visibility
+            
+            checkbox_rect = cell_rect
+            checkbox_rect.setWidth(checkbox_size)
+            checkbox_rect.setHeight(checkbox_size)
+            checkbox_rect.moveLeft(cell_rect.left() + (cell_rect.width() - checkbox_size) // 2)
+            checkbox_rect.moveTop(cell_rect.top() + (cell_rect.height() - checkbox_size) // 2)
             
             checkbox_option = QStyleOptionButton()
             checkbox_option.rect = checkbox_rect

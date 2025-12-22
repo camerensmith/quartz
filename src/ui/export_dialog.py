@@ -63,7 +63,8 @@ class ExportDialog(QDialog):
         format_layout = QVBoxLayout()
         
         self.format_combo = QComboBox()
-        self.format_combo.addItems(["CSV", "JSON", "SQLite DB", "Pack (DB+Attachments)"])
+        self.format_combo.addItems(["CSV", "Excel (.xlsx)", "JSON", "SQLite DB", "Pack (DB+Attachments)"])
+        self.format_combo.currentIndexChanged.connect(self._on_format_changed)
         format_layout.addWidget(self.format_combo)
         
         # CSV options
@@ -122,9 +123,10 @@ class ExportDialog(QDialog):
         format_index = self.format_combo.currentIndex()
         formats = {
             0: ("CSV files (*.csv)", "csv"),
-            1: ("JSON files (*.json)", "json"),
-            2: ("SQLite Database (*.sqlite)", "sqlite"),
-            3: ("Zip files (*.zip)", "zip")
+            1: ("Excel files (*.xlsx)", "xlsx"),
+            2: ("JSON files (*.json)", "json"),
+            3: ("SQLite Database (*.sqlite)", "sqlite"),
+            4: ("Zip files (*.zip)", "zip")
         }
         file_filter, ext = formats.get(format_index, ("All files (*)", ""))
         
@@ -161,7 +163,7 @@ class ExportDialog(QDialog):
         
         # Determine format
         format_index = self.format_combo.currentIndex()
-        formats = ["csv", "json", "db", "pack"]
+        formats = ["csv", "xlsx", "json", "db", "pack"]
         export_format = formats[format_index]
         
         # Perform export
@@ -172,6 +174,11 @@ class ExportDialog(QDialog):
                 delimiter = self.delimiter_combo.currentText()
                 success = self.export_service.export_csv(
                     self.export_path, record_ids, include_headers, delimiter
+                )
+            elif export_format == "xlsx":
+                include_headers = self.include_headers_check.isChecked()
+                success = self.export_service.export_excel(
+                    self.export_path, record_ids, include_headers
                 )
             elif export_format == "json":
                 success = self.export_service.export_json(self.export_path, record_ids)
@@ -191,3 +198,14 @@ class ExportDialog(QDialog):
             self.accept()
         else:
             QMessageBox.warning(self, "Error", "Export failed. Please check the file path and try again.")
+    
+    def _on_format_changed(self):
+        """Handle format selection change - show/hide CSV options"""
+        format_index = self.format_combo.currentIndex()
+        # Show CSV options for CSV and Excel formats (index 0 and 1)
+        self.csv_options_group.setVisible(format_index in [0, 1])
+        # Hide delimiter option for Excel (only show for CSV)
+        # The delimiter combo is in a layout, find its parent widget
+        delimiter_parent = self.delimiter_combo.parent()
+        if delimiter_parent:
+            delimiter_parent.setVisible(format_index == 0)  # Only show for CSV
