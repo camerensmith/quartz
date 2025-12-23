@@ -471,14 +471,19 @@ class CollectionPropertiesDialog(QDialog):
         # Remove deleted fields
         deleted_keys = existing_keys - keys_in_table
         for key in deleted_keys:
-            # Note: Field deletion would require dropping column from records table
-            # This is a destructive operation, so we'll just warn for now
-            QMessageBox.warning(
-                self, "Field Deletion",
-                f"Field '{key}' was removed from the list.\n\n"
-                f"To fully delete a field, use a database migration tool.\n"
-                f"The field column will remain in records but won't be shown."
-            )
+            try:
+                # Get field label for better error messages
+                field_info = existing_fields.get(key, {})
+                field_label = field_info.get("alias", field_info.get("label", key))
+                
+                # Actually delete the field from the collection
+                self.store.remove_field(key)
+            except Exception as e:
+                QMessageBox.warning(
+                    self, "Error",
+                    f"Failed to delete field '{key}': {str(e)}"
+                )
+                return
         
         # Save description
         self._save_description()

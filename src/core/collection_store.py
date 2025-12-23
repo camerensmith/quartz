@@ -285,12 +285,7 @@ class CollectionStore:
         self.conn.commit()
     
     def remove_field(self, field_key: str):
-        """Remove a field from the collection schema
-        
-        Note: SQLite doesn't support DROP COLUMN directly, so the column
-        will remain in the records table but will be ignored by the UI.
-        To fully remove the column, the table would need to be recreated.
-        """
+        """Remove a field from the collection schema and drop the column from records table"""
         self.connect()
         cursor = self.conn.cursor()
         
@@ -298,6 +293,80 @@ class CollectionStore:
         cursor.execute("SELECT indexed FROM fields WHERE field_key = ?", (field_key,))
         field_row = cursor.fetchone()
         was_indexed = field_row and field_row[0] == 1
+        
+        # Check if the column exists in the records table before trying to drop it
+        cursor.execute("PRAGMA table_info(records)")
+        table_columns = [col[1] for col in cursor.fetchall()]
+        column_exists = field_key in table_columns
+        
+        # Try to drop the column from records table if it exists
+        # SQLite 3.35.0+ supports DROP COLUMN, older versions need table recreation
+        if column_exists:
+            try:
+                # First, try the modern DROP COLUMN approach (SQLite 3.35.0+)
+                cursor.execute(f"ALTER TABLE records DROP COLUMN {field_key}")
+                self.conn.commit()
+            except sqlite3.OperationalError:
+                # Fallback: Recreate the table without the column (for older SQLite versions)
+                # Get the current table structure
+                cursor.execute("PRAGMA table_info(records)")
+                table_info = cursor.fetchall()
+                
+                # Determine ID column type
+                id_type = "INTEGER"
+                id_autoincrement = False
+                for col in table_info:
+                    if col[1] == 'id':
+                        id_type = col[2]  # INTEGER or TEXT
+                        # Check if AUTOINCREMENT (SQLite sets pk=1 for primary key)
+                        if col[5] == 1 and id_type == "INTEGER":
+                            id_autoincrement = True
+                        break
+                
+                # Build list of columns to keep (excluding the field being removed)
+                columns_to_keep = []
+                column_defs = []
+                
+                for col in table_info:
+                    col_name = col[1]
+                    if col_name == field_key:
+                        continue  # Skip the column we're removing
+                    
+                    columns_to_keep.append(col_name)
+                    
+                    # Build column definition
+                    if col_name == 'id':
+                        if id_type == "INTEGER" and id_autoincrement:
+                            column_defs.append(f"{col_name} INTEGER PRIMARY KEY AUTOINCREMENT")
+                        elif id_type == "INTEGER":
+                            column_defs.append(f"{col_name} INTEGER PRIMARY KEY")
+                        else:
+                            column_defs.append(f"{col_name} TEXT PRIMARY KEY")
+                    elif col_name == 'record_uuid':
+                        column_defs.append(f"{col_name} TEXT UNIQUE NOT NULL")
+                    elif col_name in ('created_at', 'updated_at'):
+                        column_defs.append(f"{col_name} TEXT NOT NULL")
+                    else:
+                        # Dynamic field columns are all TEXT
+                        column_defs.append(f"{col_name} TEXT")
+                
+                # Create new table without the dropped column
+                create_sql = f"CREATE TABLE records_new ({', '.join(column_defs)})"
+                cursor.execute(create_sql)
+                
+                # Copy data (excluding the dropped column)
+                select_cols = ", ".join(columns_to_keep)
+                cursor.execute(f"INSERT INTO records_new SELECT {select_cols} FROM records")
+                
+                # Drop old table and rename new one
+                cursor.execute("DROP TABLE records")
+                cursor.execute("ALTER TABLE records_new RENAME TO records")
+                
+                # Recreate indexes
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_records_created_at ON records(created_at)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_records_updated_at ON records(updated_at)")
+                
+                self.conn.commit()
         
         # Remove from fields table
         cursor.execute("DELETE FROM fields WHERE field_key = ?", (field_key,))

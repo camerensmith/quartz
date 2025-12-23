@@ -1539,8 +1539,9 @@ class MainWindow(QMainWindow):
             self.table_view.selectRow(0)
             if self.form_toggle.isChecked():
                 # Load first record in form view
-                record = self.table_view.model.filtered_records[0]
-                self.form_view.load_record(record["id"])
+                if len(self.table_view.model.filtered_records) > 0:
+                    record = self.table_view.model.filtered_records[0]
+                    self.form_view.load_record(record["id"])
 
     def _switch_to_view(self, index: int):
         """Switch to Table (0) or Form (1) view
@@ -2036,14 +2037,14 @@ class MainWindow(QMainWindow):
         
         if reply == QMessageBox.Yes:
             try:
-                # Note: Actual field deletion requires schema migration
-                # For now, we'll show a message that this needs to be done via Collection Properties
-                QMessageBox.information(
-                    self,
-                    "Field Deletion",
-                    f"To fully delete field '{field_label}', please use the Collection Properties dialog.\n\n"
-                    f"The field column will remain in the database but can be hidden from the UI."
-                )
+                # Actually delete the field from the collection
+                self.current_store.remove_field(field_key)
+                
+                # Refresh the collection view to reflect the change
+                if self.current_collection:
+                    self._open_collection(self.current_collection)
+                
+                self.statusBar().showMessage(f"Field '{field_label}' deleted successfully", 3000)
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to delete field: {str(e)}")
     
