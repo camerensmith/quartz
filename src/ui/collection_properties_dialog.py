@@ -147,13 +147,15 @@ class CollectionPropertiesDialog(QDialog):
             # Required (column 4)
             required_item = QTableWidgetItem()
             required_item.setCheckState(Qt.Checked if field.get("required") else Qt.Unchecked)
-            required_item.setFlags(required_item.flags() | Qt.ItemIsUserCheckable)
+            # Only allow checking, not editing text
+            required_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
             self.fields_table.setItem(row, 4, required_item)
             
             # Indexed (column 5)
             indexed_item = QTableWidgetItem()
             indexed_item.setCheckState(Qt.Checked if field.get("indexed") else Qt.Unchecked)
-            indexed_item.setFlags(indexed_item.flags() | Qt.ItemIsUserCheckable)
+            # Only allow checking, not editing text
+            indexed_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
             self.fields_table.setItem(row, 5, indexed_item)
     
     def _add_field(self):
@@ -189,13 +191,15 @@ class CollectionPropertiesDialog(QDialog):
             # Required (column 4)
             required_item = QTableWidgetItem()
             required_item.setCheckState(Qt.Checked if field_data["required"] else Qt.Unchecked)
-            required_item.setFlags(required_item.flags() | Qt.ItemIsUserCheckable)
+            # Only allow checking, not editing text
+            required_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
             self.fields_table.setItem(row, 4, required_item)
             
             # Indexed (column 5)
             indexed_item = QTableWidgetItem()
             indexed_item.setCheckState(Qt.Checked)  # Default to indexed
-            indexed_item.setFlags(indexed_item.flags() | Qt.ItemIsUserCheckable)
+            # Only allow checking, not editing text
+            indexed_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
             self.fields_table.setItem(row, 5, indexed_item)
     
     def _move_field_up(self, row: int):

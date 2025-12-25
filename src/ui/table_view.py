@@ -10,39 +10,56 @@ from PySide6.QtWidgets import (
     QMenu,
     QStyledItemDelegate,
     QAbstractItemDelegate,
+    QStyle,
 )
-from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, Signal, QDate, QDateTime
-from PySide6.QtGui import QKeySequence, QShortcut, QIcon, QKeyEvent, QFont, QPen, QMouseEvent
+from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, Signal, QDate, QDateTime, QItemSelectionModel, QItemSelection
+from PySide6.QtGui import QKeySequence, QShortcut, QIcon, QKeyEvent, QFont, QPen, QMouseEvent, QColor
 
 from src.core.collection_store import CollectionStore
 from src.ui.table_delegates import FieldTypeDelegate, ValidationErrorDelegate
 
 
 class CellBorderDelegate(QStyledItemDelegate):
-    """Delegate that draws a black border around selected cells"""
+    """Delegate that draws a border around selected cells"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.view = parent
     
+    def _is_dark_mode(self):
+        """Detect if we're in dark mode by checking table background color"""
+        if not self.view:
+            return False
+        bg_color = self.view.palette().color(self.view.backgroundRole())
+        # Dark mode typically has background RGB values < 128
+        return bg_color.red() < 128 and bg_color.green() < 128 and bg_color.blue() < 128
+    
     def paint(self, painter, option, index):
-        """Paint cell with black border if selected"""
+        """Paint cell with border if selected"""
+        # Disable default focus indicator (dotted rectangle around text)
+        option.state &= ~QStyle.State_HasFocus
+        
         # Check if this cell is selected
         if self.view and self.view.selectionModel():
             is_selected = self.view.selectionModel().isSelected(index)
             is_current = (index == self.view.currentIndex())
             
             if is_selected or is_current:
-                # Draw black border around selected/current cell
+                # Draw border around entire cell
                 painter.save()
-                pen = QPen(Qt.black, 2)  # 2px black border
+                # Use lighter grey for dark mode, black for light mode
+                if self._is_dark_mode():
+                    border_color = QColor("#f5f5f5")  # Very light grey, almost white for dark mode
+                else:
+                    border_color = QColor(Qt.black)
+                pen = QPen(border_color, 3)  # 3px border - thicker for better visibility
                 painter.setPen(pen)
-                # Draw border rectangle (inside the cell bounds)
+                # Draw border rectangle around the entire cell
                 border_rect = option.rect.adjusted(1, 1, -1, -1)
                 painter.drawRect(border_rect)
                 painter.restore()
         
-        # Call parent paint to draw cell content
+        # Call parent paint to draw cell content (without focus indicator)
         super().paint(painter, option, index)
 
 
@@ -68,6 +85,7 @@ class RecordsTableModel(QAbstractTableModel):
         self._sort_order = Qt.AscendingOrder  # Current sort order
         self._max_cache_size = 2000  # Maximum cached records (prevent memory bloat)
         self._formatted_cache: Dict[tuple, Any] = {}  # Cache formatted values: (row, col, role) -> value
+        self._filter_error: Optional[str] = None  # Error message when filters are invalid
     
     def _get_date_format(self) -> str:
         """Get date format from config"""
@@ -105,6 +123,7 @@ class RecordsTableModel(QAbstractTableModel):
             self._total_count = 0
             self.endResetModel()
         else:
+            self._filter_error = None  # Clear filter error when collection changes
             self._refresh_data()
 
     def _refresh_data(self):
@@ -212,12 +231,14 @@ class RecordsTableModel(QAbstractTableModel):
         if not self.store:
             return None
         
-        # If we have filtered_records (from search/filter), use those first
+        # If we have filtered_records (from search/filter), ALWAYS use those first
+        # This takes priority over cache to ensure filtered results are shown
         if self.filtered_records and 0 <= row < len(self.filtered_records):
             return self.filtered_records[row]
         
-        # Check if we have it cached
-        if row in self._record_cache:
+        # Don't use cache if we have filtered_records (they should be used instead)
+        # Check if we have it cached (only if no filtered_records)
+        if not self.filtered_records and row in self._record_cache:
             return self._record_cache[row]
         
         # Check if we're in virtualized mode
@@ -234,6 +255,10 @@ class RecordsTableModel(QAbstractTableModel):
 
     def rowCount(self, parent=QModelIndex()) -> int:
         """Return total row count (virtualized or actual)"""
+        # If there's a filter error, show one row for the error message
+        if self._filter_error:
+            return 1
+        
         # If we have filtered_records, use that count
         if self.filtered_records:
             return len(self.filtered_records)
@@ -285,9 +310,21 @@ class RecordsTableModel(QAbstractTableModel):
         row = index.row()
         col = index.column()
 
-        # Check cache first (for formatted values)
+        # If there's a filter error, show error message in first column
+        if self._filter_error:
+            if role == Qt.DisplayRole:
+                if col == 0:
+                    return "⚠"
+                elif col == 1:
+                    return self._filter_error
+                else:
+                    return ""
+            return None
+
+        # If we have filtered_records, don't use cache (row indices have changed)
+        # Check cache first (for formatted values) only if not using filtered_records
         cache_key = (row, col, role)
-        if cache_key in self._formatted_cache:
+        if not self.filtered_records and cache_key in self._formatted_cache:
             return self._formatted_cache[cache_key]
 
         # Get record (will load batch if needed in virtualized mode)
@@ -831,36 +868,30 @@ class TableView(QTableView):
         
         menu = QMenu(self)
         
-        # For primary key column (column 0), show Hide/Show Key option
+        # Note: Show/Hide Key is only available through View menu, not context menu
+        # Skip primary key column (column 0) - no context menu options for it
         if column == 0:
-            # Check if key column is currently visible
-            is_visible = not self.isColumnHidden(0)
-            if is_visible:
-                hide_action = menu.addAction("Hide Key")
-                hide_action.triggered.connect(lambda: self.setColumnHidden(0, True))
-            else:
-                show_action = menu.addAction("Show Key")
-                show_action.triggered.connect(lambda: self.setColumnHidden(0, False))
-        else:
-            # For other columns, show field removal option
-            # Adjust for primary key column (column 0)
-            field_index = column - 1
-            
-            # Validate field index bounds
-            if field_index < 0 or field_index >= len(self.model.fields):
-                return
-            
-            field = self.model.fields[field_index]
-            field_key = field["key"]
-            field_label = field["label"]
+            return
+        
+        # For other columns, show field removal option
+        # Adjust for primary key column (column 0)
+        field_index = column - 1
+        
+        # Validate field index bounds
+        if field_index < 0 or field_index >= len(self.model.fields):
+            return
+        
+        field = self.model.fields[field_index]
+        field_key = field["key"]
+        field_label = field["label"]
 
-            from src.core.resource_path import asset_path
-            remove_action = menu.addAction(
-                QIcon(str(asset_path("delete_column.svg"))), f"Remove Field '{field_label}'..."
-            )
-            remove_action.triggered.connect(
-                lambda: self._remove_field(field_key, field_label)
-            )
+        from src.core.resource_path import asset_path
+        remove_action = menu.addAction(
+            QIcon(str(asset_path("delete_column.svg"))), f"Remove Field '{field_label}'..."
+        )
+        remove_action.triggered.connect(
+            lambda: self._remove_field(field_key, field_label)
+        )
         
         menu.exec(self.horizontalHeader().mapToGlobal(position))
 
@@ -887,24 +918,34 @@ class TableView(QTableView):
         
         if is_row_click:
             row = index.row()
+            # Get count of selected rows (including the clicked row if not already selected)
+            selection_model = self.selectionModel()
+            selected_count = 0
+            if selection_model:
+                selected_rows = set()
+                for idx in selection_model.selectedIndexes():
+                    selected_rows.add(idx.row())
+                # Count unique rows
+                selected_count = len(selected_rows)
+                # If clicked row is not selected, it will be added, so count it
+                if row not in selected_rows:
+                    selected_count += 1
+            
             # Duplicate Row option (when clicking on a row)
             duplicate_row_action = menu.addAction("Duplicate Row")
             duplicate_row_action.triggered.connect(lambda: self._duplicate_row_via_context(row))
             
-            # Delete Row option (when clicking on a row)
-            delete_row_action = menu.addAction("Delete Row")
+            # Delete Row option - show count if multiple will be deleted
+            if selected_count > 1:
+                delete_row_action = menu.addAction(f"Delete {selected_count} Rows")
+            else:
+                delete_row_action = menu.addAction("Delete Row")
             delete_row_action.triggered.connect(lambda: self._delete_row_via_context(row))
             menu.addSeparator()
         
         # Add Row option (always available)
         add_row_action = menu.addAction("Add Row...")
         add_row_action.triggered.connect(self._add_row_via_context)
-        
-        # Show Key option (only if key column is hidden)
-        if self.isColumnHidden(0):
-            menu.addSeparator()
-            show_key_action = menu.addAction("Show Key")
-            show_key_action.triggered.connect(lambda: self.setColumnHidden(0, False))
         
         menu.exec(self.mapToGlobal(position))
         
@@ -927,9 +968,11 @@ class TableView(QTableView):
                 if self.state() == QAbstractItemView.EditingState:
                     current_editor = self.indexWidget(current)
                     if current_editor:
-                        # Commit the data
-                        self.commitData(current_editor)
-                    self.closeEditor(current_editor, QAbstractItemDelegate.NoHint)
+                        # Close editor, which will commit data automatically
+                        self.closeEditor(current_editor, QAbstractItemDelegate.EditNextItem)
+                    else:
+                        # No editor, just move to next cell
+                        pass
                 
                 # Move to next cell
                 if event.modifiers() & Qt.ShiftModifier:
@@ -972,9 +1015,11 @@ class TableView(QTableView):
                 if self.state() == QAbstractItemView.EditingState:
                     current_editor = self.indexWidget(current)
                     if current_editor:
-                        # Commit the data
-                        self.commitData(current_editor)
-                    self.closeEditor(current_editor, QAbstractItemDelegate.NoHint)
+                        # Close editor, which will commit data automatically
+                        self.closeEditor(current_editor, QAbstractItemDelegate.EditNextItem)
+                    else:
+                        # No editor, just move down
+                        pass
                 
                 # Move down (or up with Shift)
                 if event.modifiers() & Qt.ShiftModifier:
@@ -1124,18 +1169,32 @@ class TableView(QTableView):
             parent._duplicate_record()
     
     def _delete_row_via_context(self, row: int):
-        """Delete a row via context menu"""
+        """Delete a row via context menu - works with multiple selections and cell clicks"""
         # Find main window through parent chain
         parent = self.parent()
         while parent and not hasattr(parent, "_delete_record"):
             parent = parent.parent()
         
         if parent and hasattr(parent, "_delete_record"):
-            # Only select the row if it's not already selected
-            # This prevents unwanted selection changes when right-clicking
-            selected_rows = [idx.row() for idx in self.selectedIndexes()]
-            if row not in selected_rows:
-                self.selectRow(row)
+            # Get current selection
+            selection_model = self.selectionModel()
+            if selection_model:
+                selected_rows = set()
+                for idx in selection_model.selectedIndexes():
+                    selected_rows.add(idx.row())
+                
+                # If the clicked row is not selected, add it to selection without clearing others
+                # This allows deleting from any cell, even if the row isn't fully selected
+                if row not in selected_rows:
+                    # Add this row to selection using additive selection (like Ctrl+Click)
+                    # Select all columns in the row to ensure the entire row is selected
+                    first_col = self.model.index(row, 0)
+                    last_col = self.model.index(row, self.model.columnCount() - 1)
+                    row_selection = QItemSelection(first_col, last_col)
+                    selection_model.select(row_selection, QItemSelectionModel.Select | QItemSelectionModel.Rows)
+            
+            # Call delete_record which will handle all selected rows
+            # This will delete the row that was right-clicked, plus any other selected rows
             parent._delete_record()
 
     def _remove_field(self, field_key: str, field_label: str):

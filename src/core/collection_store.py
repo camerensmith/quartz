@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Any, Union
 from datetime import datetime
 import json
+import pandas as pd
 
 
 class CollectionStore:
@@ -640,12 +641,41 @@ class CollectionStore:
             parser = QueryParser(fields)
             where_clause, params = parser.build_sql_filter(filter_tree, "r")
             if not where_clause:
+                # If no where clause (e.g., simple text search bypassed FTS5), use simple search
+                if filter_tree.get("type") == "text":
+                    return self.simple_search(query, limit)
                 return []
+            
+            # Check if FTS5 table exists before using FTS5 queries
+            cursor.execute("""
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name = 'records_fts'
+            """)
+            fts_exists = cursor.fetchone() is not None
+            
+            # If WHERE clause uses FTS5 but table doesn't exist, fall back to simple search
+            if "records_fts" in where_clause and not fts_exists:
+                return self.simple_search(query, limit)
+            
             sql = f"SELECT r.* FROM records r WHERE {where_clause}"
             if limit:
                 sql += f" LIMIT {limit}"
-            cursor.execute(sql, params)
-            return [dict(row) for row in cursor.fetchall()]
+            try:
+                cursor.execute(sql, params)
+                results = [dict(row) for row in cursor.fetchall()]
+                # If FTS5 query returns no results for a non-empty query, 
+                # and the query looks like it should match something, try simple search
+                if not results and query and query.strip() and len(query.strip()) >= 2:
+                    # Only fall back if it's a simple text query (not a field query)
+                    if filter_tree.get("type") == "text":
+                        return self.simple_search(query, limit)
+                return results
+            except Exception as e:
+                # If query fails, try simple search as fallback
+                # Make sure we use the original query, not a corrupted one
+                if query and query.strip():
+                    return self.simple_search(query, limit)
+                return []
         
         # Simple FTS5 search (backward compatible)
         # Check if FTS table exists
@@ -657,7 +687,8 @@ class CollectionStore:
             # Fallback to simple LIKE search
             return self.simple_search(query, limit)
         
-        # Use FTS5 search
+        # Use FTS5 search - format query for prefix matching
+        formatted_query = self._format_fts5_query(query)
         sql = """
             SELECT r.* FROM records r
             JOIN records_fts fts ON r.id = fts.rowid
@@ -665,25 +696,110 @@ class CollectionStore:
         """
         if limit:
             sql += f" LIMIT {limit}"
-        cursor.execute(sql, (query,))
-        return [dict(row) for row in cursor.fetchall()]
+        try:
+            cursor.execute(sql, (formatted_query,))
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            # If FTS5 query fails (e.g., syntax error), fall back to simple search
+            return self.simple_search(query, limit)
+    
+    def _format_fts5_query(self, query: str) -> str:
+        """Format query string for FTS5 search with proper escaping and prefix matching"""
+        if not query:
+            return ""
+        
+        query = query.strip()
+        
+        # If query contains FTS5 operators (AND, OR, NOT) as part of the text (not operators),
+        # we need to quote the entire phrase. Otherwise, use prefix matching.
+        # Check if query looks like it might contain operators
+        has_operators = any(op in query.upper() for op in [' AND ', ' OR ', ' NOT '])
+        
+        if has_operators and len(query.split()) > 1:
+            # Quote the entire phrase to treat operators as literal text
+            escaped = query.replace('"', '""')
+            return f'"{escaped}"*'
+        
+        # For simple queries, use prefix matching per word
+        words = query.split()
+        formatted_words = []
+        
+        for word in words:
+            # Escape quotes
+            escaped_word = word.replace('"', '""')
+            # Add * for prefix matching if the word doesn't already end with *
+            if not escaped_word.endswith('*'):
+                escaped_word += '*'
+            formatted_words.append(escaped_word)
+        
+        # For single word, just return it with *
+        if len(formatted_words) == 1:
+            return formatted_words[0]
+        
+        # For multiple words, use AND (both must match) for better results
+        return ' AND '.join(formatted_words)
     
     def simple_search(self, query: str, limit: Optional[int] = None) -> List[Dict]:
-        """Fallback simple search using LIKE"""
+        """Advanced search using pandas for better filtering"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if not query or not query.strip():
+            return []
+        
+        query = query.strip()
+        
         self.connect()
         cursor = self.conn.cursor()
         
-        # Get all text fields
-        fields = self.list_fields()
-        text_fields = [f["key"] for f in fields if f["type"] in ("text", "notes")]
+        # Get all records as DataFrame for better filtering
+        cursor.execute("SELECT * FROM records")
+        rows = cursor.fetchall()
         
-        if not text_fields:
+        if not rows:
             return []
         
-        conditions = " OR ".join([f"{field} LIKE ?" for field in text_fields])
-        sql = f"SELECT * FROM records WHERE {conditions}"
+        # Get column names
+        columns = [description[0] for description in cursor.description]
+        
+        # Convert to pandas DataFrame
+        df = pd.DataFrame(rows, columns=columns)
+        
+        # Get searchable fields (exclude id)
+        fields = self.list_fields()
+        searchable_fields = [f["key"] for f in fields if f["key"] != "id"]
+        
+        if not searchable_fields:
+            return []
+        
+        # Build filter: query must appear in at least one searchable field
+        query_lower = query.lower()
+        mask = pd.Series([False] * len(df))
+        
+        for field in searchable_fields:
+            if field in df.columns:
+                # Convert to string and search case-insensitively
+                field_mask = df[field].astype(str).str.lower().str.contains(query_lower, na=False, regex=False)
+                mask = mask | field_mask
+        
+        # Apply filter
+        filtered_df = df[mask]
+        
+        # Log first few matches
+        if len(filtered_df) > 0:
+            for idx, row in filtered_df.head(3).iterrows():
+                matching_fields = []
+                for field in searchable_fields:
+                    if field in row and pd.notna(row[field]):
+                        field_str = str(row[field]).lower()
+                        if query_lower in field_str:
+                            matching_fields.append(f"{field}='{row[field]}'")
+        
+        # Apply limit if specified
         if limit:
-            sql += f" LIMIT {limit}"
-        pattern = f"%{query}%"
-        cursor.execute(sql, [pattern] * len(text_fields))
-        return [dict(row) for row in cursor.fetchall()]
+            filtered_df = filtered_df.head(limit)
+        
+        # Convert back to list of dicts
+        results = filtered_df.to_dict('records')
+        
+        return results

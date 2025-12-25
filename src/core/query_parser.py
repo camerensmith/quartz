@@ -131,15 +131,52 @@ class QueryParser:
             # Return simple text search on parse error
             return {"type": "text", "value": query}
     
+    def _format_fts5_query(self, query: str) -> str:
+        """Format query string for FTS5 search with proper escaping and prefix matching"""
+        if not query:
+            return ""
+        
+        query = query.strip()
+        
+        # If query contains FTS5 operators (AND, OR, NOT) as part of the text (not operators),
+        # we need to quote the entire phrase. Otherwise, use prefix matching.
+        # Check if query looks like it might contain operators
+        has_operators = any(op in query.upper() for op in [' AND ', ' OR ', ' NOT '])
+        
+        if has_operators and len(query.split()) > 1:
+            # Quote the entire phrase to treat operators as literal text
+            escaped = query.replace('"', '""')
+            return f'"{escaped}"*'
+        
+        # For simple queries, use prefix matching per word
+        words = query.split()
+        formatted_words = []
+        
+        for word in words:
+            # Escape quotes
+            escaped_word = word.replace('"', '""')
+            # Add * for prefix matching if the word doesn't already end with *
+            if not escaped_word.endswith('*'):
+                escaped_word += '*'
+            formatted_words.append(escaped_word)
+        
+        # For single word, just return it with *
+        if len(formatted_words) == 1:
+            return formatted_words[0]
+        
+        # For multiple words, use AND (both must match) for better results
+        return ' AND '.join(formatted_words)
+    
     def build_sql_filter(self, filter_tree: Dict[str, Any], table_alias: str = "r") -> tuple[str, List[Any]]:
         """Build SQL WHERE clause from filter tree"""
         if not filter_tree:
             return "", []
         
         if filter_tree.get("type") == "text":
-            # Simple FTS search
-            value = filter_tree["value"]
-            return f"{table_alias}.id IN (SELECT rowid FROM records_fts WHERE records_fts MATCH ?)", [value]
+            # For now, return None to force fallback to simple_search
+            # This ensures basic search works reliably
+            # TODO: Fix FTS5 query formatting and re-enable
+            return None, []
         
         if filter_tree.get("type") == "field":
             # Field predicate

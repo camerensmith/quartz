@@ -5,7 +5,8 @@ from typing import Optional
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTabWidget, QWidget,
-    QLineEdit, QSpinBox, QComboBox, QCheckBox, QGroupBox, QFileDialog, QMessageBox
+    QLineEdit, QSpinBox, QComboBox, QCheckBox, QGroupBox, QFileDialog, QMessageBox,
+    QGridLayout
 )
 from PySide6.QtCore import Qt
 
@@ -33,12 +34,17 @@ class PreferencesDialog(QDialog):
         if self.config:
             # Support new theme system with color_scheme and mode
             color_scheme = self.config.get("color_scheme", "default")
-            mode = self.config.get("mode", "light")
             
-            # Backward compatibility: if old theme setting exists, use it
-            old_theme = self.config.get("theme", None)
-            if old_theme and old_theme in ["light", "dark", "system"]:
-                mode = old_theme if old_theme != "system" else "light"
+            # Check if mode is explicitly set in config, otherwise use default or migrate from old theme
+            if "mode" in self.config.data:
+                mode = self.config.get("mode", "light")
+            else:
+                # Backward compatibility: migrate old theme setting to mode if mode not explicitly set
+                old_theme = self.config.get("theme", None)
+                if old_theme and old_theme in ["light", "dark", "system"]:
+                    mode = old_theme if old_theme != "system" else "light"
+                else:
+                    mode = "light"
             
             stylesheet = AppStyles.get_theme(color_scheme=color_scheme, mode=mode)
             self.setStyleSheet(stylesheet)
@@ -135,67 +141,76 @@ class PreferencesDialog(QDialog):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         
-        # Color Scheme
-        color_scheme_group = QGroupBox("Color Scheme")
-        color_scheme_layout = QVBoxLayout()
-        color_scheme_layout.addWidget(QLabel("Color Scheme:"))
+        # Color Scheme and Mode
+        theme_group = QGroupBox("Theme")
+        theme_layout = QGridLayout()
+        theme_layout.setSpacing(12)
+        theme_layout.setColumnStretch(0, 1)  # Left label column
+        theme_layout.setColumnStretch(1, 0)  # Left control column (no stretch)
+        theme_layout.setColumnStretch(2, 1)  # Right label column
+        theme_layout.setColumnStretch(3, 0)  # Right control column (no stretch)
+        
+        # Color Scheme (Left Column)
+        color_scheme_label = QLabel("Color Scheme:")
         self.color_scheme_combo = QComboBox()
         self.color_scheme_combo.addItems(["Default (Purple)", "Magenta", "Modern (Black/Grey)"])
         self.color_scheme_combo.currentTextChanged.connect(self._on_theme_changed)
-        color_scheme_layout.addWidget(self.color_scheme_combo)
-        color_scheme_group.setLayout(color_scheme_layout)
-        layout.addWidget(color_scheme_group)
+        theme_layout.addWidget(color_scheme_label, 0, 0)
+        theme_layout.addWidget(self.color_scheme_combo, 0, 1)
+        
+        # Mode (Right Column)
+        mode_label = QLabel("Mode:")
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["Light", "Dark"])
+        self.mode_combo.currentTextChanged.connect(self._on_theme_changed)
+        theme_layout.addWidget(mode_label, 0, 2)
+        theme_layout.addWidget(self.mode_combo, 0, 3)
+        
+        theme_group.setLayout(theme_layout)
+        layout.addWidget(theme_group)
         
         # Table View Settings
         table_group = QGroupBox("Table View")
-        table_layout = QVBoxLayout()
-        table_layout.setSpacing(8)
+        table_layout = QGridLayout()
+        table_layout.setSpacing(12)
+        table_layout.setColumnStretch(0, 1)  # Left label column
+        table_layout.setColumnStretch(1, 0)  # Left control column (no stretch)
+        table_layout.setColumnStretch(2, 1)  # Right label column
+        table_layout.setColumnStretch(3, 0)  # Right control column (no stretch)
         
-        # Row Height
-        row_height_layout = QHBoxLayout()
+        # Row Height (Left Column)
         row_height_label = QLabel("Row Height:")
-        row_height_label.setMinimumWidth(120)
-        row_height_layout.addWidget(row_height_label)
         self.row_height_spin = QSpinBox()
         self.row_height_spin.setMinimum(20)
         self.row_height_spin.setMaximum(50)
         self.row_height_spin.setSuffix(" px")
         self.row_height_spin.setMinimumWidth(100)
-        row_height_layout.addWidget(self.row_height_spin)
-        row_height_layout.addStretch()
-        table_layout.addLayout(row_height_layout)
+        table_layout.addWidget(row_height_label, 0, 0)
+        table_layout.addWidget(self.row_height_spin, 0, 1)
         
-        # Default Column Width
-        col_width_layout = QHBoxLayout()
+        # Default Column Width (Right Column)
         col_width_label = QLabel("Default Column Width:")
-        col_width_label.setMinimumWidth(120)
-        col_width_layout.addWidget(col_width_label)
         self.col_width_spin = QSpinBox()
         self.col_width_spin.setMinimum(50)
         self.col_width_spin.setMaximum(500)
         self.col_width_spin.setSuffix(" px")
         self.col_width_spin.setMinimumWidth(100)
-        col_width_layout.addWidget(self.col_width_spin)
-        col_width_layout.addStretch()
-        table_layout.addLayout(col_width_layout)
+        table_layout.addWidget(col_width_label, 0, 2)
+        table_layout.addWidget(self.col_width_spin, 0, 3)
         
-        # Font Size
-        font_size_layout = QHBoxLayout()
+        # Font Size (Left Column)
         font_size_label = QLabel("Font Size:")
-        font_size_label.setMinimumWidth(120)
-        font_size_layout.addWidget(font_size_label)
         self.font_size_spin = QSpinBox()
         self.font_size_spin.setMinimum(8)
         self.font_size_spin.setMaximum(20)
         self.font_size_spin.setSuffix(" pt")
         self.font_size_spin.setMinimumWidth(100)
-        font_size_layout.addWidget(self.font_size_spin)
-        font_size_layout.addStretch()
-        table_layout.addLayout(font_size_layout)
+        table_layout.addWidget(font_size_label, 1, 0)
+        table_layout.addWidget(self.font_size_spin, 1, 1)
         
-        # Hide table images
+        # Hide table images (Right Column, spans label and control)
         self.hide_table_images_check = QCheckBox("Hide table images")
-        table_layout.addWidget(self.hide_table_images_check)
+        table_layout.addWidget(self.hide_table_images_check, 1, 2, 1, 2)  # row, col, rowspan, colspan
         
         table_group.setLayout(table_layout)
         layout.addWidget(table_group)
@@ -278,22 +293,26 @@ class PreferencesDialog(QDialog):
         if not self.config:
             return
         
-        # Get current selection (mode is kept from config, not shown in UI)
+        # Get current selection
         color_scheme_map = {"Default (Purple)": "default", "Magenta": "magenta", "Modern (Black/Grey)": "modern"}
+        mode_map = {"Light": "light", "Dark": "dark"}
         
         color_scheme = color_scheme_map.get(self.color_scheme_combo.currentText(), "default")
-        mode = self.config.get("mode", "light")  # Keep current mode
+        mode = mode_map.get(self.mode_combo.currentText(), "light")
         
         # Temporarily update config to preview theme
         old_color_scheme = self.config.get("color_scheme", "default")
+        old_mode = self.config.get("mode", "light")
         
         self.config.set("color_scheme", color_scheme)
+        self.config.set("mode", mode)
         
         # Apply theme
         self._apply_theme()
         
         # Restore old values (will be saved when user clicks OK)
         self.config.set("color_scheme", old_color_scheme)
+        self.config.set("mode", old_mode)
     
     def _browse_workspace(self):
         """Browse for workspace directory"""
@@ -320,6 +339,11 @@ class PreferencesDialog(QDialog):
         color_scheme = self.config.get("color_scheme", "default")
         color_scheme_map = {"default": "Default (Purple)", "magenta": "Magenta", "modern": "Modern (Black/Grey)"}
         self.color_scheme_combo.setCurrentText(color_scheme_map.get(color_scheme, "Default (Purple)"))
+        
+        # Load mode
+        mode = self.config.get("mode", "light")
+        mode_map = {"light": "Light", "dark": "Dark"}
+        self.mode_combo.setCurrentText(mode_map.get(mode, "Light"))
         
         self.row_height_spin.setValue(self.config.get("table_row_height", 24))
         self.col_width_spin.setValue(self.config.get("column_width_default", 120))
@@ -367,6 +391,10 @@ class PreferencesDialog(QDialog):
         # Save color scheme
         color_scheme_map = {"Default (Purple)": "default", "Magenta": "magenta", "Modern (Black/Grey)": "modern"}
         self.config.set("color_scheme", color_scheme_map.get(self.color_scheme_combo.currentText(), "default"))
+        
+        # Save mode
+        mode_map = {"Light": "light", "Dark": "dark"}
+        self.config.set("mode", mode_map.get(self.mode_combo.currentText(), "light"))
         
         self.config.set("table_row_height", self.row_height_spin.value())
         self.config.set("column_width_default", self.col_width_spin.value())

@@ -365,9 +365,21 @@ class FieldTypeDelegate(QStyledItemDelegate):
         
         return super().editorEvent(event, model, option, index)
     
+    def _is_dark_mode(self, view):
+        """Detect if we're in dark mode by checking table background color"""
+        if not view:
+            return False
+        bg_color = view.palette().color(view.backgroundRole())
+        # Dark mode typically has background RGB values < 128
+        return bg_color.red() < 128 and bg_color.green() < 128 and bg_color.blue() < 128
+    
     def paint(self, painter: QPainter, option, index: QModelIndex):
         """Custom paint for checkbox fields and selected cell borders"""
-        # Check if this cell is selected/current and draw black border
+        # Disable default focus indicator (dotted rectangle around text)
+        from PySide6.QtWidgets import QStyle
+        option.state &= ~QStyle.State_HasFocus
+        
+        # Check if this cell is selected/current - we'll draw border after parent paint
         view = None
         parent = self.parent()
         while parent:
@@ -376,19 +388,11 @@ class FieldTypeDelegate(QStyledItemDelegate):
                 break
             parent = parent.parent() if hasattr(parent, 'parent') else None
         
+        should_draw_border = False
         if view and view.selectionModel():
             is_selected = view.selectionModel().isSelected(index)
             is_current = (index == view.currentIndex())
-            
-            if is_selected or is_current:
-                # Draw black border around selected/current cell
-                painter.save()
-                pen = QPen(Qt.black, 2)  # 2px black border
-                painter.setPen(pen)
-                # Draw border rectangle (inside the cell bounds)
-                border_rect = option.rect.adjusted(1, 1, -1, -1)
-                painter.drawRect(border_rect)
-                painter.restore()
+            should_draw_border = (is_selected or is_current)
         
         if self.field_type == "checkbox":
             value = index.model().data(index, Qt.DisplayRole)
@@ -428,6 +432,21 @@ class FieldTypeDelegate(QStyledItemDelegate):
         else:
             # Default painting for other types
             super().paint(painter, option, index)
+        
+        # Draw border AFTER parent paint so it appears on top (for both checkbox and other field types)
+        if should_draw_border:
+            painter.save()
+            # Use lighter grey for dark mode, black for light mode
+            if self._is_dark_mode(view):
+                border_color = QColor("#f5f5f5")  # Very light grey, almost white for dark mode
+            else:
+                border_color = QColor(Qt.black)
+            pen = QPen(border_color, 2)  # 2px border - thicker for better visibility
+            painter.setPen(pen)
+            # Draw border rectangle around the entire cell
+            border_rect = option.rect.adjusted(1, 1, -1, -1)
+            painter.drawRect(border_rect)
+            painter.restore()
 
 
 class ValidationErrorDelegate(QStyledItemDelegate):
@@ -449,9 +468,21 @@ class ValidationErrorDelegate(QStyledItemDelegate):
         """Clear all errors"""
         self.error_cells.clear()
     
+    def _is_dark_mode(self, view):
+        """Detect if we're in dark mode by checking table background color"""
+        if not view:
+            return False
+        bg_color = view.palette().color(view.backgroundRole())
+        # Dark mode typically has background RGB values < 128
+        return bg_color.red() < 128 and bg_color.green() < 128 and bg_color.blue() < 128
+    
     def paint(self, painter: QPainter, option, index: QModelIndex):
         """Paint with error highlighting and selected cell border"""
-        # Check if this cell is selected/current and draw black border
+        # Disable default focus indicator (dotted rectangle around text)
+        from PySide6.QtWidgets import QStyle
+        option.state &= ~QStyle.State_HasFocus
+        
+        # Check if this cell is selected/current and draw border
         view = None
         parent = self.parent()
         while parent:
@@ -465,11 +496,16 @@ class ValidationErrorDelegate(QStyledItemDelegate):
             is_current = (index == view.currentIndex())
             
             if is_selected or is_current:
-                # Draw black border around selected/current cell
+                # Draw border around entire cell
                 painter.save()
-                pen = QPen(Qt.black, 2)  # 2px black border
+                # Use lighter grey for dark mode, black for light mode
+                if self._is_dark_mode(view):
+                    border_color = QColor("#f5f5f5")  # Very light grey, almost white for dark mode
+                else:
+                    border_color = QColor(Qt.black)
+                pen = QPen(border_color, 3)  # 3px border - thicker for better visibility
                 painter.setPen(pen)
-                # Draw border rectangle (inside the cell bounds)
+                # Draw border rectangle around the entire cell
                 border_rect = option.rect.adjusted(1, 1, -1, -1)
                 painter.drawRect(border_rect)
                 painter.restore()

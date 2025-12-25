@@ -6,7 +6,7 @@ from typing import List, Dict, Optional, Tuple
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget,
     QTableWidgetItem, QLineEdit, QComboBox, QGroupBox, QCheckBox, QTextEdit,
-    QMessageBox, QHeaderView
+    QMessageBox, QHeaderView, QWidget, QScrollArea
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QIcon
@@ -37,51 +37,41 @@ class AdvancedSearchDialog(QDialog):
         """Initialize UI"""
         layout = QVBoxLayout(self)
         
-        # Base search query
-        base_group = QGroupBox("Base Search Query")
-        base_layout = QVBoxLayout()
-        self.base_query_input = QLineEdit()
-        self.base_query_input.setPlaceholderText("Enter base search query (e.g., field:value or rating>7)")
-        self.base_query_input.setToolTip(
-            "Base search query using the standard syntax:\n"
-            "- Simple: just type text\n"
-            "- Field: field:value or field>value\n"
-            "- Boolean: field1:value AND field2:value OR field3:value"
-        )
-        base_layout.addWidget(self.base_query_input)
-        base_group.setLayout(base_layout)
-        layout.addWidget(base_group)
+        # Search criteria builder (with guardrails)
+        criteria_group = QGroupBox("Search Criteria")
+        criteria_layout = QVBoxLayout()
         
-        # SQL Operators (optional)
-        operators_group = QGroupBox("SQL Operators (Optional)")
-        operators_layout = QVBoxLayout()
+        # Simple text search option
+        self.use_text_search = QCheckBox("Simple text search (searches all fields)")
+        self.use_text_search.setChecked(False)
+        self.text_search_input = QLineEdit()
+        self.text_search_input.setPlaceholderText("Enter text to search for...")
+        self.text_search_input.setEnabled(False)
+        self.use_text_search.toggled.connect(lambda checked: self.text_search_input.setEnabled(checked))
+        criteria_layout.addWidget(self.use_text_search)
+        criteria_layout.addWidget(self.text_search_input)
         
-        # WHERE clause
-        where_layout = QHBoxLayout()
-        where_layout.addWidget(QLabel("WHERE:"))
-        self.where_input = QLineEdit()
-        self.where_input.setPlaceholderText("Additional WHERE conditions (e.g., field IS NOT NULL)")
-        where_layout.addWidget(self.where_input)
-        operators_layout.addLayout(where_layout)
+        # Field-based search criteria (builder)
+        self.criteria_list = []  # List of {field, operator, value, logic} dicts
+        self.criteria_widgets = []  # List of widget containers
         
-        # OR clause
-        or_layout = QHBoxLayout()
-        or_layout.addWidget(QLabel("OR:"))
-        self.or_input = QLineEdit()
-        self.or_input.setPlaceholderText("OR conditions (e.g., field:value OR field2:value2)")
-        or_layout.addWidget(self.or_input)
-        operators_layout.addLayout(or_layout)
+        criteria_scroll = QWidget()
+        criteria_scroll_layout = QVBoxLayout(criteria_scroll)
+        criteria_scroll_layout.setContentsMargins(0, 0, 0, 0)
         
-        # HAVING clause
-        having_layout = QHBoxLayout()
-        having_layout.addWidget(QLabel("HAVING:"))
-        self.having_input = QLineEdit()
-        self.having_input.setPlaceholderText("HAVING conditions (e.g., COUNT(*) > 5)")
-        having_layout.addWidget(self.having_input)
-        operators_layout.addLayout(having_layout)
+        # Add first criterion row
+        self._add_criterion_row(criteria_scroll_layout)
         
-        operators_group.setLayout(operators_layout)
-        layout.addWidget(operators_group)
+        criteria_layout.addWidget(QLabel("Or build field-based search:"))
+        criteria_layout.addWidget(criteria_scroll)
+        
+        # Add criterion button
+        add_criterion_btn = QPushButton("+ Add Another Condition")
+        add_criterion_btn.clicked.connect(lambda: self._add_criterion_row(criteria_scroll_layout))
+        criteria_layout.addWidget(add_criterion_btn)
+        
+        criteria_group.setLayout(criteria_layout)
+        layout.addWidget(criteria_group)
         
         # Collection selection
         collections_group = QGroupBox("Search Collections")
@@ -98,31 +88,14 @@ class AdvancedSearchDialog(QDialog):
         if self.workspace:
             collections = self.workspace.list_collections()
             self.collections_list.addItems(collections)
+            self.collections_list.currentTextChanged.connect(self._on_collection_changed)
+            # Populate fields initially (all collections by default)
+            self._populate_field_dropdowns(collections)
         collections_layout.addWidget(QLabel("Or select specific collections:"))
         collections_layout.addWidget(self.collections_list)
         
         collections_group.setLayout(collections_layout)
         layout.addWidget(collections_group)
-        
-        # Results table
-        results_group = QGroupBox("Search Results")
-        results_layout = QVBoxLayout()
-        
-        self.results_table = QTableWidget()
-        self.results_table.setColumnCount(3)
-        self.results_table.setHorizontalHeaderLabels(["Collection", "Record ID", "Preview"])
-        self.results_table.horizontalHeader().setStretchLastSection(True)
-        self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.results_table.setSelectionMode(QTableWidget.SingleSelection)
-        self.results_table.itemDoubleClicked.connect(self._on_result_double_clicked)
-        results_layout.addWidget(self.results_table)
-        
-        # Results count
-        self.results_label = QLabel("No results")
-        results_layout.addWidget(self.results_label)
-        
-        results_group.setLayout(results_layout)
-        layout.addWidget(results_group)
         
         # Buttons
         button_layout = QHBoxLayout()
@@ -140,20 +113,163 @@ class AdvancedSearchDialog(QDialog):
         
         layout.addLayout(button_layout)
     
+    def _add_criterion_row(self, parent_layout):
+        """Add a new criterion row with dropdowns"""
+        row_widget = QWidget()
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 4, 0, 4)
+        
+        # Logic operator (AND/OR) - only show if not first row
+        logic_combo = QComboBox()
+        logic_combo.addItems(["AND", "OR"])
+        if len(self.criteria_widgets) == 0:
+            logic_combo.setVisible(False)  # Hide for first row
+        row_layout.addWidget(logic_combo)
+        
+        # Field dropdown
+        field_combo = QComboBox()
+        field_combo.addItem("Select field...", None)
+        # Populate with fields from all collections (we'll get them dynamically)
+        row_layout.addWidget(QLabel("Field:"))
+        row_layout.addWidget(field_combo)
+        
+        # Operator dropdown
+        operator_combo = QComboBox()
+        operator_combo.addItems(["=", "!=", ">", "<", ">=", "<=", "LIKE", "IS NULL", "IS NOT NULL"])
+        row_layout.addWidget(QLabel("Operator:"))
+        row_layout.addWidget(operator_combo)
+        
+        # Value input (hidden for IS NULL / IS NOT NULL)
+        value_input = QLineEdit()
+        value_input.setPlaceholderText("Value...")
+        row_layout.addWidget(QLabel("Value:"))
+        row_layout.addWidget(value_input)
+        
+        # Remove button
+        remove_btn = QPushButton("×")
+        remove_btn.setFixedSize(24, 24)
+        remove_btn.clicked.connect(lambda: self._remove_criterion_row(row_widget))
+        row_layout.addWidget(remove_btn)
+        
+        # Show/hide value input based on operator
+        def on_operator_changed():
+            op = operator_combo.currentText()
+            value_input.setVisible(op not in ("IS NULL", "IS NOT NULL"))
+        
+        operator_combo.currentTextChanged.connect(on_operator_changed)
+        
+        parent_layout.addWidget(row_widget)
+        self.criteria_widgets.append({
+            "widget": row_widget,
+            "logic": logic_combo,
+            "field": field_combo,
+            "operator": operator_combo,
+            "value": value_input
+        })
+    
+    def _remove_criterion_row(self, widget):
+        """Remove a criterion row"""
+        for i, criteria in enumerate(self.criteria_widgets):
+            if criteria["widget"] == widget:
+                # Hide the widget
+                widget.setParent(None)
+                widget.deleteLater()
+                self.criteria_widgets.pop(i)
+                # Show logic combo for first remaining row if any
+                if self.criteria_widgets:
+                    self.criteria_widgets[0]["logic"].setVisible(False)
+                break
+    
+    def _populate_field_dropdowns(self, collections):
+        """Populate field dropdowns with fields from collections"""
+        all_fields = set()
+        for collection_name in collections:
+            try:
+                info = self.workspace.get_collection_info(collection_name)
+                if not info:
+                    continue
+                db_path = self.workspace.workspace_path / info.db_path
+                store = CollectionStore(db_path)
+                store.connect()
+                try:
+                    fields = store.list_fields()
+                    for field in fields:
+                        if field["key"] != "id":
+                            field_label = field.get("alias", field.get("label", field["key"]))
+                            all_fields.add((field["key"], field_label))
+                finally:
+                    store.close()
+            except Exception:
+                continue
+        
+        # Update all field dropdowns
+        for criteria in self.criteria_widgets:
+            field_combo = criteria["field"]
+            current_data = field_combo.currentData()
+            field_combo.clear()
+            field_combo.addItem("Select field...", None)
+            for field_key, field_label in sorted(all_fields, key=lambda x: x[1].lower()):
+                field_combo.addItem(field_label, field_key)
+            # Restore selection if possible
+            if current_data:
+                index = field_combo.findData(current_data)
+                if index >= 0:
+                    field_combo.setCurrentIndex(index)
+    
     def _on_search_all_toggled(self, checked: bool):
         """Handle search all collections checkbox"""
         self.collections_list.setEnabled(not checked)
+        # Update field dropdowns when collection selection changes
+        if checked:
+            collections = self.workspace.list_collections() if self.workspace else []
+        else:
+            selected = self.collections_list.currentText()
+            collections = [selected] if selected else []
+        self._populate_field_dropdowns(collections)
+    
+    def _on_collection_changed(self, text: str):
+        """Handle collection selection change"""
+        if not self.search_all_check.isChecked():
+            self._populate_field_dropdowns([text] if text else [])
     
     def _perform_search(self):
         """Perform advanced search across collections"""
-        base_query = self.base_query_input.text().strip()
-        where_clause = self.where_input.text().strip()
-        or_clause = self.or_input.text().strip()
-        having_clause = self.having_input.text().strip()
+        # Check if using simple text search
+        use_text_search = self.use_text_search.isChecked()
+        text_query = self.text_search_input.text().strip() if use_text_search else ""
         
-        # At least base query or one operator must be provided
-        if not base_query and not where_clause and not or_clause and not having_clause:
-            QMessageBox.warning(self, "Error", "Please enter a base search query or at least one SQL operator")
+        # Build query from criteria
+        criteria_query_parts = []
+        for criteria in self.criteria_widgets:
+            field_key = criteria["field"].currentData()
+            operator = criteria["operator"].currentText()
+            value = criteria["value"].text().strip()
+            
+            if not field_key:
+                continue  # Skip if no field selected
+            
+            # Build condition
+            if operator in ("IS NULL", "IS NOT NULL"):
+                condition = f"{field_key} {operator}"
+            elif operator == "LIKE":
+                condition = f"{field_key} LIKE '%{value}%'"
+            else:
+                # Escape value for safety
+                value_escaped = value.replace("'", "''")
+                condition = f"{field_key} {operator} '{value_escaped}'"
+            
+            # Add logic operator if not first condition
+            if criteria_query_parts:
+                logic = criteria["logic"].currentText()
+                criteria_query_parts.append(logic)
+            
+            criteria_query_parts.append(condition)
+        
+        base_query = " ".join(criteria_query_parts) if criteria_query_parts else ""
+        
+        # At least one search method must be provided
+        if not text_query and not base_query:
+            QMessageBox.warning(self, "Error", "Please enter a text search or add at least one field condition")
             return
         
         if not self.workspace:
@@ -190,42 +306,30 @@ class AdvancedSearchDialog(QDialog):
                 store.connect()
                 
                 try:
-                    # Build search query
-                    search_query = base_query
-                    
-                    # Combine with OR if provided
-                    if or_clause:
-                        if search_query:
-                            search_query = f"({search_query}) OR ({or_clause})"
-                        else:
-                            search_query = or_clause
-                    
                     # Get fields for query parser
                     fields = [f["key"] for f in store.list_fields()]
                     
                     # Perform search
-                    if search_query:
+                    records = []
+                    if use_text_search and text_query:
+                        # Simple text search
+                        records = store.simple_search(text_query)
+                    elif base_query:
+                        # Field-based search using query parser
                         from src.core.query_parser import QueryParser
                         parser = QueryParser(fields)
                         try:
-                            filter_tree = parser.parse(search_query)
+                            filter_tree = parser.parse(base_query)
                             if filter_tree:
-                                records = store.search_records(search_query, filter_tree=filter_tree)
+                                records = store.search_records(base_query, filter_tree=filter_tree)
                             else:
-                                records = store.search_records(search_query)
+                                records = store.search_records(base_query)
                         except Exception:
-                            records = store.search_records(search_query)
+                            # Fallback to simple search if parsing fails
+                            records = store.simple_search(base_query)
                     else:
-                        # No base query, get all records for WHERE/HAVING filtering
+                        # No search criteria, get all records
                         records = store.list_records()
-                    
-                    # Apply WHERE clause if provided
-                    if where_clause:
-                        records = self._apply_where_clause(records, where_clause, fields)
-                    
-                    # Apply HAVING clause if provided (for aggregated results)
-                    if having_clause:
-                        records = self._apply_having_clause(records, having_clause, fields)
                     
                     # Add collection info to each record
                     for record in records:
@@ -243,8 +347,13 @@ class AdvancedSearchDialog(QDialog):
                     f"Error searching collection '{collection_name}':\n{str(e)}"
                 )
         
-        # Display results
-        self._display_results()
+        # Display results in separate modal
+        if self.results:
+            from src.ui.search_results_dialog import SearchResultsDialog
+            results_dialog = SearchResultsDialog(self, self.results)
+            results_dialog.exec()
+        else:
+            QMessageBox.information(self, "No Results", "No results found matching your search criteria.")
     
     def _apply_where_clause(self, records: List[Dict], where_clause: str, fields: List[str]) -> List[Dict]:
         """Apply WHERE clause filtering to records"""
@@ -335,65 +444,4 @@ class AdvancedSearchDialog(QDialog):
         # Default: if condition is not empty and not "0" or "false", return True
         return condition and condition.lower() not in ("0", "false", "null", "''")
     
-    def _display_results(self):
-        """Display search results in table"""
-        self.results_table.setRowCount(len(self.results))
-        
-        for row, result in enumerate(self.results):
-            collection = result["collection"]
-            record = result["record"]
-            record_id = record.get("id", "")
-            
-            # Collection name
-            collection_item = QTableWidgetItem(collection)
-            collection_item.setFlags(collection_item.flags() & ~Qt.ItemIsEditable)
-            self.results_table.setItem(row, 0, collection_item)
-            
-            # Record ID
-            id_item = QTableWidgetItem(str(record_id))
-            id_item.setFlags(id_item.flags() & ~Qt.ItemIsEditable)
-            self.results_table.setItem(row, 1, id_item)
-            
-            # Preview (first few field values)
-            preview_parts = []
-            for key, value in list(record.items())[:3]:  # First 3 fields
-                if key != "id" and value:
-                    preview_parts.append(f"{key}: {str(value)[:30]}")
-            preview = " | ".join(preview_parts) if preview_parts else "(empty record)"
-            
-            preview_item = QTableWidgetItem(preview)
-            preview_item.setFlags(preview_item.flags() & ~Qt.ItemIsEditable)
-            self.results_table.setItem(row, 2, preview_item)
-        
-        self.results_table.resizeColumnsToContents()
-        
-        # Update results count
-        count = len(self.results)
-        self.results_label.setText(f"Found {count} result(s) across {len(set(r['collection'] for r in self.results))} collection(s)")
-    
-    def _on_result_double_clicked(self, item: QTableWidgetItem):
-        """Handle double-click on result to open collection and record"""
-        row = item.row()
-        if row < len(self.results):
-            result = self.results[row]
-            collection_name = result["collection"]
-            record_id = result["record"].get("id")
-            
-            # Call parent method to open this collection and record
-            parent = self.parent()
-            if parent and hasattr(parent, '_open_collection_and_record'):
-                try:
-                    parent._open_collection_and_record(collection_name, record_id)
-                    self.accept()
-                except Exception as e:
-                    QMessageBox.warning(
-                        self, "Error",
-                        f"Failed to open collection and record:\n{str(e)}"
-                    )
-            else:
-                QMessageBox.information(
-                    self, "Result",
-                    f"Collection: {collection_name}\nRecord ID: {record_id}\n\n"
-                    f"Double-click to open this record in the main window."
-                )
 

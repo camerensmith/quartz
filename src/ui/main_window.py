@@ -1,7 +1,7 @@
 """Main application window"""
 
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Any
 
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QAbstractItemView,
+    QSizePolicy,
+    QFrame,
 )
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtCore import Qt, Signal, QSize, QEvent
@@ -103,6 +105,9 @@ class MainWindow(QMainWindow):
         self.collection_filters: Dict[str, str] = {}  # collection_name -> search_query
         self.collection_sorting: Dict[str, tuple] = {}  # collection_name -> (column, order)
         
+        # Active filters (list of filter dicts: {field/text, operator, value})
+        self.active_filters: List[Dict] = []
+        
         # Form lock state (starts unlocked)
         self.form_locked = False
         
@@ -144,12 +149,19 @@ class MainWindow(QMainWindow):
         """Apply theme stylesheet"""
         # Support new theme system with color_scheme and mode
         color_scheme = self.config.get("color_scheme", "default")
-        mode = self.config.get("mode", "light")
         
-        # Backward compatibility: if old theme setting exists, use it
-        old_theme = self.config.get("theme", None)
-        if old_theme and old_theme in ["light", "dark", "system"]:
-            mode = old_theme if old_theme != "system" else "light"
+        # Check if mode is explicitly set in config, otherwise use default or migrate from old theme
+        if "mode" in self.config.data:
+            mode = self.config.get("mode", "light")
+        else:
+            # Backward compatibility: migrate old theme setting to mode if mode not explicitly set
+            old_theme = self.config.get("theme", None)
+            if old_theme and old_theme in ["light", "dark", "system"]:
+                mode = old_theme if old_theme != "system" else "light"
+                # Migrate to new setting
+                self.config.set("mode", mode)
+            else:
+                mode = "light"
         
         stylesheet = AppStyles.get_theme(color_scheme=color_scheme, mode=mode)
         self.setStyleSheet(stylesheet)
@@ -314,17 +326,23 @@ class MainWindow(QMainWindow):
         # Search box
         self.search_box = QLineEdit()
         self.search_box.setProperty("class", "search")
-        self.search_box.setPlaceholderText("Search... (try: field:value or rating>7)")
-        self.search_box.setToolTip(
-            "Search syntax:\n"
-            "- Simple: just type text\n"
-            "- Field: field:value or field>value\n"
-            "- Boolean: field1:value AND field2:value OR field3:value\n"
-            "- Not: NOT field:value"
-        )
+        self.search_box.setPlaceholderText("Search...")
+        self.search_box.setToolTip("Type to search and filter records in real-time")
         self.search_box.textChanged.connect(self._on_search)
         self.search_box.setMinimumWidth(250)
         top_bar.addWidget(self.search_box)
+        
+        # Filter button
+        filter_icon_path = asset_path("filter.png")
+        self.filter_btn = QPushButton()
+        if filter_icon_path.exists():
+            self.filter_btn.setIcon(QIcon(str(filter_icon_path)))
+        self.filter_btn.setProperty("class", "nav")
+        self.filter_btn.setToolTip("Add Filter")
+        self.filter_btn.setFixedSize(20, 20)
+        self.filter_btn.setIconSize(QSize(16, 16))
+        self.filter_btn.clicked.connect(self._open_filter_dialog)
+        top_bar.addWidget(self.filter_btn)
         
         # Advanced search button
         adv_icon_path = asset_path("adv.png")
@@ -339,6 +357,19 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.adv_search_btn)
 
         right_layout.addWidget(self.top_bar_widget)
+        
+        # Filter chips container (below search bar)
+        from PySide6.QtWidgets import QScrollArea, QFrame
+        
+        self.filter_chips_container = QWidget()
+        self.filter_chips_layout = QHBoxLayout(self.filter_chips_container)
+        self.filter_chips_layout.setContentsMargins(8, 4, 8, 4)
+        self.filter_chips_layout.setSpacing(8)
+        self.filter_chips_layout.addStretch()
+        self.filter_chips_container.setVisible(False)  # Hidden until filters are added
+        # Allow wrapping of filter chips
+        self.filter_chips_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        right_layout.addWidget(self.filter_chips_container)
         
         # Install event filter on top_bar_widget to detect clicks on empty space
         self.top_bar_widget.installEventFilter(self)
@@ -1478,6 +1509,10 @@ class MainWindow(QMainWindow):
         self.current_store.connect()
         self.current_collection = name
 
+        # Clear active filters when switching collections (filters don't persist)
+        self.active_filters = []
+        self._update_filter_chips()
+
         # Update views
         fields = self.current_store.list_fields()
         self.table_view.set_collection(self.current_store, fields)
@@ -1590,7 +1625,7 @@ class MainWindow(QMainWindow):
         self._search_timer.start(300)
 
     def _perform_search(self):
-        """Perform the actual search"""
+        """Perform the actual search with text query and active filters"""
         if not self.current_store or not self.current_collection:
             return
 
@@ -1602,43 +1637,318 @@ class MainWindow(QMainWindow):
             self.collection_filters: Dict[str, str] = {}
         self.collection_filters[self.current_collection] = query
 
-        if not query.strip():
+        # Get all records (either all or filtered by text search)
+        if not query.strip() and not self.active_filters:
             # Show all records
-            # In virtualized mode, we need to load records if they're not loaded
             if model._virtualized and model._total_count > 500:
-                # For virtualized mode, clear filter by resetting
                 model._search_query = None
                 model._refresh_data()
             else:
                 model.filtered_records = model.records.copy() if model.records else []
         else:
-            # Parse query and search
-            from src.core.query_parser import QueryParser
-
-            fields = [f["key"] for f in self.current_store.list_fields()]
-            parser = QueryParser(fields)
-            try:
-                filter_tree = parser.parse(query)
-
-                if filter_tree:
-                    model.filtered_records = self.current_store.search_records(
-                        query, filter_tree=filter_tree
-                    )
-                else:
-                    # Fallback to simple search
-                    model.filtered_records = self.current_store.search_records(query)
-            except Exception:
-                # If parsing fails, use simple search
-                model.filtered_records = self.current_store.search_records(query)
+            # Use simple search for text query (autofilter as user types)
+            if query.strip():
+                model.filtered_records = self.current_store.simple_search(query)
+            else:
+                # No text query, start with all records
+                model.filtered_records = model.records.copy() if model.records else []
+            
+            # Apply active filters (AND logic - all filters must match)
+            if self.active_filters:
+                model.filtered_records = self._apply_filters(model.filtered_records)
             
             # Store search query for virtualized mode
             model._search_query = query
 
+        # Clear caches when filtering to ensure fresh data is displayed
+        model._formatted_cache.clear()
+        model._record_cache.clear()
+        model._loaded_batches.clear()
+        
         model.beginResetModel()
         model.endResetModel()
 
         # Update navigation
         self._update_navigation()
+    
+    def _apply_filters(self, records: List[Dict]) -> List[Dict]:
+        """Apply active filters to records (AND logic)"""
+        model = self.table_view.model
+        model._filter_error = None  # Clear any previous error
+        
+        if not self.active_filters or not records:
+            return records
+        
+        # Validate filters first
+        if not self.current_store:
+            model._filter_error = "Cannot display information: No collection selected"
+            return []
+        
+        fields = self.current_store.list_fields()
+        field_keys = {f["key"] for f in fields}
+        
+        filtered = records
+        for filter_item in self.active_filters:
+            field_or_text = filter_item.get("field_or_text")
+            operator = filter_item.get("operator")
+            value = filter_item.get("value")
+            
+            if not field_or_text or not operator:
+                model._filter_error = "Cannot display information: Invalid filter configuration"
+                return []
+            
+            # Validate field exists (unless it's a text search)
+            if field_or_text != "text" and field_or_text not in field_keys:
+                field_label = filter_item.get("field_label", field_or_text)
+                model._filter_error = f"Cannot display information: Field '{field_label}' does not exist"
+                return []
+            
+            # Validate value is provided (unless operator is IS NULL or IS NOT NULL)
+            if operator not in ("IS NULL", "IS NOT NULL") and (value is None or (isinstance(value, str) and not value.strip())):
+                model._filter_error = "Cannot display information: Filter value is required"
+                return []
+            
+            # Filter the records
+            new_filtered = []
+            for record in filtered:
+                if field_or_text == "text":
+                    # Search across all fields
+                    matches = False
+                    for field_key, field_value in record.items():
+                        if field_key == "id":
+                            continue
+                        field_str = str(field_value) if field_value is not None else ""
+                        if self._match_filter(field_str, operator, value):
+                            matches = True
+                            break
+                    if matches:
+                        new_filtered.append(record)
+                else:
+                    # Filter by specific field
+                    field_value = record.get(field_or_text)
+                    
+                    # Check if this is a checkbox/boolean field
+                    field_info = next((f for f in self.current_store.list_fields() if f["key"] == field_or_text), None)
+                    is_checkbox = field_info and field_info.get("type") == "checkbox"
+                    
+                    if is_checkbox:
+                        # Handle checkbox/boolean filtering
+                        if self._match_checkbox_filter(field_value, operator, value):
+                            new_filtered.append(record)
+                    else:
+                        # Regular field filtering
+                        field_str = str(field_value) if field_value is not None else ""
+                        if self._match_filter(field_str, operator, value):
+                            new_filtered.append(record)
+            
+            filtered = new_filtered
+        
+        return filtered
+    
+    def _match_filter(self, field_value: str, operator: str, filter_value: str) -> bool:
+        """Check if field value matches filter criteria"""
+        field_lower = field_value.lower()
+        filter_lower = str(filter_value).lower()
+        
+        if operator == "=" or operator == "IS":
+            # Exact match (case-insensitive for strings, exact for numbers)
+            try:
+                # Try numeric comparison
+                field_num = float(field_value)
+                filter_num = float(filter_value)
+                return abs(field_num - filter_num) < 0.0001  # Handle floating point precision
+            except (ValueError, TypeError):
+                return field_lower == filter_lower
+        elif operator == "!=" or operator == "IS NOT":
+            try:
+                field_num = float(field_value)
+                filter_num = float(filter_value)
+                return abs(field_num - filter_num) >= 0.0001
+            except (ValueError, TypeError):
+                return field_lower != filter_lower
+        elif operator == "LIKE":
+            return filter_lower in field_lower
+        elif operator == "NOT LIKE":
+            return filter_lower not in field_lower
+        elif operator == ">":
+            try:
+                return float(field_value) > float(filter_value)
+            except (ValueError, TypeError):
+                return False
+        elif operator == "<":
+            try:
+                return float(field_value) < float(filter_value)
+            except (ValueError, TypeError):
+                return False
+        elif operator == ">=":
+            try:
+                return float(field_value) >= float(filter_value)
+            except (ValueError, TypeError):
+                return False
+        elif operator == "<=":
+            try:
+                return float(field_value) <= float(filter_value)
+            except (ValueError, TypeError):
+                return False
+        
+        return False
+    
+    def _match_checkbox_filter(self, field_value: Any, operator: str, filter_value: str) -> bool:
+        """Check if checkbox/boolean field value matches filter criteria"""
+        # Normalize field value to boolean
+        field_bool = self._normalize_to_bool(field_value)
+        
+        # Normalize filter value to boolean
+        filter_bool = self._normalize_to_bool(filter_value)
+        
+        if operator == "=" or operator == "IS":
+            return field_bool == filter_bool
+        elif operator == "!=" or operator == "IS NOT":
+            return field_bool != filter_bool
+        elif operator == "LIKE" or operator == "NOT LIKE":
+            # For LIKE operators on checkboxes, treat as substring match on string representation
+            field_str = str(field_value).lower() if field_value is not None else ""
+            filter_str = str(filter_value).lower()
+            if operator == "LIKE":
+                return filter_str in field_str
+            else:
+                return filter_str not in field_str
+        else:
+            # Comparison operators don't make sense for booleans
+            return False
+    
+    def _normalize_to_bool(self, value: Any) -> bool:
+        """Normalize a value to boolean, accepting various formats"""
+        if value is None:
+            return False
+        
+        # If already boolean
+        if isinstance(value, bool):
+            return value
+        
+        # Convert to string and check common true/false representations
+        value_str = str(value).lower().strip()
+        
+        # True values
+        if value_str in ("true", "1", "yes", "on", "checked", "✓", "☑"):
+            return True
+        
+        # False values
+        if value_str in ("false", "0", "no", "off", "unchecked", "", "✗", "☐"):
+            return False
+        
+        # Try numeric conversion
+        try:
+            num = float(value_str)
+            return num != 0
+        except (ValueError, TypeError):
+            pass
+        
+        # Default: non-empty string is True
+        return bool(value_str)
+    
+    def _open_filter_dialog(self):
+        """Open filter creation dialog"""
+        if not self.current_store:
+            return
+        
+        from src.ui.filter_dialog import FilterDialog
+        
+        dialog = FilterDialog(self, self.current_store)
+        if dialog.exec():
+            filter_item = dialog.get_filter()
+            if filter_item:
+                self.active_filters.append(filter_item)
+                self._update_filter_chips()
+                self._perform_search()
+    
+    def _update_filter_chips(self):
+        """Update the filter chips display"""
+        # Clear existing chips
+        while self.filter_chips_layout.count() > 1:  # Keep the stretch
+            item = self.filter_chips_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # Add chips for each active filter
+        for i, filter_item in enumerate(self.active_filters):
+            chip = self._create_filter_chip(filter_item, i)
+            self.filter_chips_layout.insertWidget(self.filter_chips_layout.count() - 1, chip)
+        
+        # Show/hide container based on whether there are filters
+        self.filter_chips_container.setVisible(len(self.active_filters) > 0)
+    
+    def _create_filter_chip(self, filter_item: Dict, index: int):
+        """Create a filter chip widget"""
+        from PySide6.QtWidgets import QFrame, QLabel
+        
+        chip = QFrame()
+        chip.setProperty("class", "filter-chip")
+        chip_layout = QHBoxLayout(chip)
+        chip_layout.setContentsMargins(8, 4, 4, 4)
+        chip_layout.setSpacing(6)
+        
+        # Build filter text
+        field_or_text = filter_item.get("field_or_text", "")
+        operator = filter_item.get("operator", "")
+        value = filter_item.get("value", "")
+        
+        if field_or_text == "text":
+            filter_text = f"Text {operator} {value}"
+        else:
+            # Use field_label if available, otherwise look it up from fields
+            field_label = filter_item.get("field_label")
+            if not field_label and self.current_store:
+                # Look up field label from store
+                fields = self.current_store.list_fields()
+                field = next((f for f in fields if f["key"] == field_or_text), None)
+                if field:
+                    field_label = field.get("alias", field.get("label", field_or_text))
+                else:
+                    field_label = field_or_text  # Fallback to key if not found
+            filter_text = f"{field_label} {operator} {value}"
+        
+        # Label with ellipsis
+        label = QLabel(filter_text)
+        label.setProperty("class", "filter-chip-label")
+        label.setToolTip(filter_text)  # Full text on hover
+        label.setWordWrap(False)
+        label.setMaximumWidth(200)  # Max width before ellipsis
+        label.setTextFormat(Qt.PlainText)
+        # Enable ellipsis
+        metrics = label.fontMetrics()
+        elided_text = metrics.elidedText(filter_text, Qt.ElideRight, 200)
+        label.setText(elided_text)
+        chip_layout.addWidget(label)
+        
+        # Remove icon - use QLabel with pixmap, not a button
+        remove_icon_path = asset_path("removefilter.png")
+        remove_label = QLabel()
+        if remove_icon_path.exists():
+            # Load pixmap and scale to match text height
+            pixmap = QPixmap(str(remove_icon_path))
+            text_height = label.fontMetrics().height()
+            scaled_pixmap = pixmap.scaled(text_height, text_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            remove_label.setPixmap(scaled_pixmap)
+            remove_label.setFixedSize(text_height, text_height)
+        else:
+            remove_label.setText("×")  # Fallback to text if icon doesn't exist
+            remove_label.setFixedSize(16, 16)
+        remove_label.setProperty("class", "filter-chip-remove")
+        remove_label.setToolTip("Remove filter")
+        remove_label.setCursor(Qt.PointingHandCursor)  # Show hand cursor on hover
+        # Make label clickable
+        remove_label.mousePressEvent = lambda event, idx=index: self._remove_filter(idx)
+        chip_layout.addWidget(remove_label)
+        
+        return chip
+    
+    def _remove_filter(self, index: int):
+        """Remove a filter by index"""
+        if 0 <= index < len(self.active_filters):
+            self.active_filters.pop(index)
+            self._update_filter_chips()
+            self._perform_search()
     
     def _open_advanced_search(self):
         """Open advanced search dialog"""
@@ -1839,10 +2149,40 @@ class MainWindow(QMainWindow):
                         self, "Error", f"Failed to delete record: {str(e)}"
                     )
 
+            # Save current filter query before refreshing
+            current_query = ""
+            if hasattr(self, 'collection_filters') and self.current_collection:
+                current_query = self.collection_filters.get(self.current_collection, "")
+            # Also check model's search query (for virtualized mode)
+            if not current_query and hasattr(model, '_search_query') and model._search_query:
+                current_query = model._search_query
+            
             # Refresh views
             model._refresh_data()
+            
+            # Reapply the filter if one was active
+            if current_query and current_query.strip():
+                # Set the pending query and perform search to reapply filter
+                # Also update search box text to keep UI in sync (block signals to avoid double trigger)
+                if hasattr(self, 'search_box'):
+                    # Only update if different to avoid unnecessary signal
+                    if self.search_box.text() != current_query:
+                        self.search_box.blockSignals(True)
+                        self.search_box.setText(current_query)
+                        self.search_box.blockSignals(False)
+                self._pending_search_query = current_query
+                self._perform_search()
+            elif hasattr(model, '_search_query'):
+                # Clear search query if no filter was active
+                model._search_query = None
+                # Ensure filtered_records shows all records
+                if not model._virtualized or model._total_count <= 500:
+                    model.filtered_records = model.records.copy() if model.records else []
+                model.beginResetModel()
+                model.endResetModel()
+            
             self._update_navigation()
-
+            
             # Clear form view if record was deleted
             if self.form_view.current_record_id in record_ids:
                 self.form_view.current_record_id = None
