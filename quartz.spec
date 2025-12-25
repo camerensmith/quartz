@@ -13,6 +13,7 @@ a = Analysis(
     ],
     hiddenimports=[
         'openpyxl',  # Required for Excel file import/export
+        'pandas',  # Required for search filtering
     ],
     hookspath=[],
     hooksconfig={},
@@ -69,7 +70,6 @@ a = Analysis(
         'PySide6.QtWebViewWidgets',
         
         # Unused pandas components (if any remain)
-        'pandas',
         'pandas.tests',
         'pandas._testing',
         
