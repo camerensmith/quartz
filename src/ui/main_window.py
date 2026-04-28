@@ -692,6 +692,13 @@ class MainWindow(QMainWindow):
 
         tools_menu.addSeparator()
 
+        audit_trail_action = QAction("Audit Trail...", self)
+        audit_trail_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
+        audit_trail_action.triggered.connect(self._show_audit_trail)
+        tools_menu.addAction(audit_trail_action)
+
+        tools_menu.addSeparator()
+
         shortcuts_action = QAction("Shortcuts...", self)
         shortcuts_action.triggered.connect(self._show_shortcuts)
         tools_menu.addAction(shortcuts_action)
@@ -3357,6 +3364,27 @@ class MainWindow(QMainWindow):
         # Clear redo history when new action is performed
         self.redo_history.clear()
         self._update_undo_redo_buttons()
+
+    def _show_audit_trail(self):
+        """Show the Audit Trail dialog"""
+        from src.ui.audit_trail_dialog import AuditTrailDialog
+
+        if not self.undo_history and not self.redo_history:
+            QMessageBox.information(
+                self,
+                "Audit Trail",
+                "No changes have been recorded yet.\n\n"
+                "Make edits to records and the audit trail will appear here.",
+            )
+            return
+
+        dlg = AuditTrailDialog(self.undo_history, self.redo_history, parent=self)
+        result = dlg.exec()
+
+        # result > 0 means "Undo to here" was clicked with that many steps
+        if result > 0:
+            for _ in range(result):
+                self._undo()
 
     def _prev_record(self):
         """Navigate to previous record"""

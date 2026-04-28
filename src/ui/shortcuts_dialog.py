@@ -83,6 +83,7 @@ class ShortcutsDialog(QDialog):
                 # Edit
                 ("Undo", "Ctrl+Z"),
                 ("Redo", "Ctrl+Y"),
+                ("Audit Trail", "Ctrl+Shift+Z"),
                 
                 # Fields
                 ("Add Field", "Ctrl+G"),
