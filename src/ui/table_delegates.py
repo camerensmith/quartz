@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QComboBox, QDateEdit, QDateTimeEdit, QWidget, QStyleOptionButton, QApplication, QStyle,
     QCalendarWidget
 )
-from PySide6.QtCore import Qt, QModelIndex, QDate, QDateTime, QAbstractItemModel, QEvent, QTimer
+from PySide6.QtCore import Qt, QModelIndex, QDate, QDateTime, QAbstractItemModel, QEvent
 from PySide6.QtGui import QColor, QPainter, QPen
 
 
@@ -228,19 +228,8 @@ class FieldTypeDelegate(QStyledItemDelegate):
                 # Regular text field
                 editor.setText(str(value) if value else "")
             
-            # Select all text when editing starts (highlight current value)
-            # Select immediately after setting text
+            # Select all text when editing starts so the first typed character replaces it
             editor.selectAll()
-            
-            # Use QTimer to ensure selection happens after editor is fully shown and focused
-            def select_all_text():
-                try:
-                    if editor and editor.isVisible() and editor.hasFocus():
-                        editor.selectAll()
-                except RuntimeError:
-                    pass
-            QTimer.singleShot(0, select_all_text)
-            QTimer.singleShot(50, select_all_text)  # Backup to ensure it happens
         elif isinstance(editor, QSpinBox):
             try:
                 editor.setValue(int(value) if value else 0)

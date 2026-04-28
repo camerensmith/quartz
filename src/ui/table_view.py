@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QStyle,
 )
-from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, Signal, QDate, QDateTime, QItemSelectionModel, QItemSelection
+from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, Signal, QDate, QDateTime, QItemSelectionModel, QItemSelection, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut, QIcon, QKeyEvent, QFont, QPen, QMouseEvent, QColor
 
 from src.core.collection_store import CollectionStore
@@ -719,10 +719,11 @@ class TableView(QTableView):
         # Use larger width to account for padding (8px on each side) and text width
         self.verticalHeader().setFixedWidth(70)  # Width for row numbers with padding (e.g., "1000")
 
-        # Enable inline editing - Tab navigation and typing handled in keyPressEvent
+        # Enable inline editing - AnyKeyPressed forwards the typed character to the new editor
         self.setEditTriggers(
             QAbstractItemView.DoubleClicked
             | QAbstractItemView.EditKeyPressed
+            | QAbstractItemView.AnyKeyPressed
         )
 
         # Enable paste
@@ -852,6 +853,7 @@ class TableView(QTableView):
             self.setEditTriggers(
                 QAbstractItemView.DoubleClicked
                 | QAbstractItemView.EditKeyPressed
+                | QAbstractItemView.AnyKeyPressed
             )
 
     def _show_header_context_menu(self, position):
@@ -1076,25 +1078,30 @@ class TableView(QTableView):
             return
         
         # For other keys, if it's a printable character and we have a selection, start editing
+        # Calling super() lets Qt use the AnyKeyPressed trigger, which both opens the editor
+        # and forwards the typed character into it (so the first keystroke is not lost).
         elif event.text() and len(event.text()) > 0 and event.text().isprintable():
             current = self.currentIndex()
             if current.isValid() and not self._readonly:
-                # Don't start editing for checkbox fields
-                field = self._get_field_for_column(current.column())
-                if field and field.get("type") == "checkbox":
-                    # Let parent handle it (might be navigation)
-                    super().keyPressEvent(event)
-                    return
-                
-                # Start editing immediately when typing
-                if self.state() != QAbstractItemView.EditingState:
-                    self.edit(current)
-                    # The key event will be forwarded to the editor automatically
-                    return
+                super().keyPressEvent(event)
+                return
         
         # Call parent implementation for other keys
         super().keyPressEvent(event)
     
+    def closeEditor(self, editor, hint):
+        """Override to auto-start editing on the next cell after Enter/Tab commits."""
+        super().closeEditor(editor, hint)
+        if hint in (QAbstractItemDelegate.EditNextItem, QAbstractItemDelegate.EditPreviousItem):
+            def _start_next_edit():
+                current = self.currentIndex()
+                if current.isValid() and not self._readonly:
+                    field = self._get_field_for_column(current.column())
+                    # Checkboxes don't use a line-editor; skip them
+                    if not (field and field.get("type") == "checkbox"):
+                        self.edit(current)
+            QTimer.singleShot(0, _start_next_edit)
+
     def _on_selection_changed(self, current: QModelIndex, previous: QModelIndex):
         """Handle selection changes to update header boldness"""
         old_column = self.model._current_column if hasattr(self.model, '_current_column') else -1
