@@ -30,7 +30,7 @@ from src.core.workspace import Workspace
 from src.core.collection_store import CollectionStore
 from src.core.resource_path import asset_path, get_quartz_icon_path
 from src.core.version import VERSION
-from src.core.update_checker import UpdateChecker
+from src.core.update_checker import UpdateChecker, UpdateCheckWorker
 from src.ui.table_view import TableView
 from src.ui.form_view import FormView
 from src.ui.styles import AppStyles
@@ -2935,84 +2935,66 @@ class MainWindow(QMainWindow):
     def _manual_check_for_updates(self):
         """Manually check for updates from Tools menu"""
         from PySide6.QtWidgets import QMessageBox
-        from PySide6.QtCore import QThread, Signal
-        
-        # Show checking message
+
+        # Show non-blocking "checking" indicator
         checking_msg = QMessageBox(self)
         checking_msg.setWindowTitle("Checking for Updates")
         checking_msg.setText("Checking for updates...")
-        checking_msg.setStandardButtons(QMessageBox.NoButton)
+        checking_msg.setStandardButtons(QMessageBox.StandardButton.NoButton)
         checking_msg.show()
-        
-        # Check in background thread
-        class UpdateCheckThread(QThread):
-            update_available = Signal(dict)
-            no_update = Signal()
-            error = Signal(str)
-            
-            def run(self):
-                try:
-                    update_info = UpdateChecker.check_for_updates()
-                    if update_info:
-                        self.update_available.emit(update_info)
-                    else:
-                        self.no_update.emit()
-                except Exception as e:
-                    self.error.emit(str(e))
-        
+
+        thread = UpdateCheckWorker(self)
+        self.update_check_threads.append(thread)
+
+        def _dismiss():
+            # Guard against being called more than once (e.g. via signal slot
+            # and then again via thread.finished)
+            if checking_msg.isVisible():
+                checking_msg.close()
+
         def on_update_available(update_info):
-            checking_msg.close()
+            _dismiss()
             self._show_update_dialog(update_info)
-        
+
         def on_no_update():
-            checking_msg.close()
+            _dismiss()
             QMessageBox.information(
                 self,
                 "No Updates",
                 f"You are running the latest version (v{VERSION})."
             )
-        
+
         def on_error(error_msg):
-            checking_msg.close()
+            _dismiss()
             QMessageBox.warning(
                 self,
                 "Update Check Failed",
                 f"Could not check for updates:\n{error_msg}"
             )
-        
-        thread = UpdateCheckThread(self)  # Parent to main window
-        self.update_check_threads.append(thread)  # Keep reference
+
         thread.update_available.connect(on_update_available)
         thread.no_update.connect(on_no_update)
         thread.error.connect(on_error)
-        thread.finished.connect(lambda: self._cleanup_thread(thread))  # Clean up when done
+        # Always dismiss the dialog and clean up, even if no signal was emitted
+        thread.finished.connect(_dismiss)
+        thread.finished.connect(lambda: self._cleanup_thread(thread))
         thread.start()
-    
+
     def _check_for_updates_async(self):
         """Check for updates asynchronously on startup (if enabled)"""
-        from PySide6.QtCore import QThread, Signal
-        
-        class UpdateCheckThread(QThread):
-            update_available = Signal(dict)
-            
-            def run(self):
-                try:
-                    update_info = UpdateChecker.check_for_updates()
-                    if update_info:
-                        self.update_available.emit(update_info)
-                except Exception:
-                    pass  # Silently fail on startup check
-        
+        thread = UpdateCheckWorker(self)
+        self.update_check_threads.append(thread)
+
         def on_update_available(update_info):
-            # Check if this version was ignored
             ignored_versions = self.config.get("update_ignored_versions", [])
             if update_info['version'] not in ignored_versions:
                 self._show_update_dialog(update_info)
-        
-        thread = UpdateCheckThread(self)  # Parent to main window
-        self.update_check_threads.append(thread)  # Keep reference
+
+        # On startup: silently ignore "no update" and errors — don't interrupt the user
         thread.update_available.connect(on_update_available)
-        thread.finished.connect(lambda: self._cleanup_thread(thread))  # Clean up when done
+        thread.no_update.connect(lambda: None)
+        thread.error.connect(lambda _: None)
+        thread.finished.connect(lambda: self._cleanup_thread(thread))
         thread.start()
     
     def _cleanup_thread(self, thread):

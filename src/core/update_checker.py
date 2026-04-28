@@ -4,6 +4,25 @@ import json
 import urllib.request
 from typing import Optional, Dict
 from src.core.version import VERSION
+from PySide6.QtCore import QThread, Signal
+
+
+class UpdateCheckWorker(QThread):
+    """Background thread that checks GitHub for the latest release."""
+
+    update_available = Signal(dict)   # emitted when a newer version exists
+    no_update = Signal()              # emitted when already on latest version
+    error = Signal(str)               # emitted on any failure
+
+    def run(self):
+        try:
+            update_info = UpdateChecker.check_for_updates()
+            if update_info:
+                self.update_available.emit(update_info)
+            else:
+                self.no_update.emit()
+        except Exception as exc:
+            self.error.emit(str(exc))
 
 
 class UpdateChecker:
