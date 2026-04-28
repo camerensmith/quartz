@@ -7,9 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v2.4.0)'
+        description: 'Release tag (e.g. v2.5.0)'
         required: true
-        default: 'v2.4.0'
 
 permissions:
   contents: write
@@ -67,21 +66,7 @@ jobs:
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: Quartz ${{ env.RELEASE_VERSION }}
-          body: |
-            ## Quartz ${{ env.RELEASE_VERSION }}
-
-            ### What's new in this release
-            - Fix seamless cell editing: forward first keystroke, auto-open next editor on commit
-            - Add Audit Trail to Tools menu with multi-step undo
-            - Fix update-check dialog freeze due to locally-scoped QThread with Signals
-            - Clean up repository (removed legacy zip artifact)
-
-            ### Installation
-            Download `Quartz-windows-${{ env.RELEASE_VERSION }}.exe` below and run it directly — no installation required.
-
-            ### Auto-update
-            Existing Quartz installations will detect this release automatically on next launch and prompt you to update.
           draft: false
           prerelease: false
           files: ${{ env.EXE_PATH }}
-          generate_release_notes: false
+          generate_release_notes: true
