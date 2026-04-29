@@ -1,14 +1,14 @@
 """Quartz - Personal Database Desktop Application
 Main entry point"""
-import sys
 import logging
+import sys
 from pathlib import Path
+
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon
-from src.ui.main_window import MainWindow
+
 from src.core.config import Config
 from src.core.version import VERSION
+from src.ui.main_window import MainWindow
 
 
 def setup_logging():
@@ -17,7 +17,7 @@ def setup_logging():
     log_dir = Path.home() / ".quartz" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "quartz.log"
-    
+
     # Configure root logger
     logging.basicConfig(
         level=logging.DEBUG,
@@ -27,7 +27,7 @@ def setup_logging():
             logging.FileHandler(log_file, mode='a', encoding='utf-8')  # File
         ]
     )
-    
+
     # Set specific loggers to appropriate levels
     logging.getLogger('PySide6').setLevel(logging.WARNING)
     logging.getLogger('PIL').setLevel(logging.WARNING)
@@ -38,7 +38,7 @@ def main():
     setup_logging()
     logger = logging.getLogger(__name__)
     logger.info("Starting Quartz application")
-    
+
     app = QApplication(sys.argv)
     app.setApplicationName('Quartz')
     app.setOrganizationName('Quartz')

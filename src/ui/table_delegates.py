@@ -1,24 +1,33 @@
 """Custom table cell editors for different field types"""
 
-from typing import Any, Optional
 
-from PySide6.QtWidgets import (
-    QStyledItemDelegate, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
-    QComboBox, QDateEdit, QDateTimeEdit, QWidget, QStyleOptionButton, QApplication, QStyle,
-    QCalendarWidget
-)
-from PySide6.QtCore import Qt, QModelIndex, QDate, QDateTime, QAbstractItemModel, QEvent
+from PySide6.QtCore import QAbstractItemModel, QDate, QDateTime, QEvent, QModelIndex, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtWidgets import (
+    QApplication,
+    QCalendarWidget,
+    QCheckBox,
+    QComboBox,
+    QDateEdit,
+    QDateTimeEdit,
+    QDoubleSpinBox,
+    QLineEdit,
+    QSpinBox,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionButton,
+    QWidget,
+)
 
 
 class FieldTypeDelegate(QStyledItemDelegate):
     """Base delegate for field-type-specific editors"""
-    
+
     def __init__(self, field: dict, parent=None):
         super().__init__(parent)
         self.field = field
         self.field_type = field.get("type", "text")
-    
+
     def _get_date_format(self) -> str:
         """Get date format from config"""
         # Try to find config through parent chain
@@ -29,7 +38,7 @@ class FieldTypeDelegate(QStyledItemDelegate):
             parent = parent.parent() if hasattr(parent, 'parent') else None
         # Default if config not found
         return "yyyy-MM-dd"
-    
+
     def _get_datetime_format(self) -> str:
         """Get datetime format from config"""
         # Try to find config through parent chain
@@ -40,13 +49,13 @@ class FieldTypeDelegate(QStyledItemDelegate):
             parent = parent.parent() if hasattr(parent, 'parent') else None
         # Default if config not found
         return "yyyy-MM-dd HH:mm:ss"
-    
+
     def createEditor(self, parent: QWidget, option, index: QModelIndex) -> QWidget:
         """Create appropriate editor based on field type"""
         # For checkboxes, don't create an editor - handle clicks directly via editorEvent
         if self.field_type == "checkbox":
             return None
-        
+
         # Ensure editor is positioned correctly within the cell
         editor = None
         if self.field_type == "integer":
@@ -69,7 +78,7 @@ class FieldTypeDelegate(QStyledItemDelegate):
             validator = QDoubleValidator()
             validator.setNotation(QDoubleValidator.Notation.StandardNotation)
             editor.setValidator(validator)
-        
+
         elif self.field_type == "date":
             editor = QDateEdit(parent)
             editor.setCalendarPopup(True)
@@ -85,7 +94,7 @@ class FieldTypeDelegate(QStyledItemDelegate):
             if date_format:
                 editor.setDisplayFormat(date_format)
             return editor
-        
+
         elif self.field_type == "datetime":
             editor = QDateTimeEdit(parent)
             editor.setCalendarPopup(True)
@@ -101,7 +110,7 @@ class FieldTypeDelegate(QStyledItemDelegate):
             if datetime_format:
                 editor.setDisplayFormat(datetime_format)
             return editor
-        
+
         elif self.field_type in ("select", "single-select"):
             editor = QComboBox(parent)
             options = self.field.get("options", [])
@@ -109,7 +118,7 @@ class FieldTypeDelegate(QStyledItemDelegate):
                 import json
                 try:
                     options = json.loads(options)
-                except:
+                except Exception:
                     options = []
             if isinstance(options, list) and len(options) > 0:
                 editor.addItems([str(opt) for opt in options])
@@ -121,14 +130,14 @@ class FieldTypeDelegate(QStyledItemDelegate):
             editor.setEnabled(True)
             editor.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
             return editor
-        
+
         # Default: text editor
         editor = QLineEdit(parent)
-        
+
         # Ensure no placeholder text is set (we want actual values, not placeholders)
         if isinstance(editor, QLineEdit):
             editor.setPlaceholderText("")  # Clear any placeholder
-        
+
         # Apply minimal styling to all editors - opaque background to hide cell content
         if editor and isinstance(editor, (QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QDateEdit, QDateTimeEdit)):
             # Opaque white background to hide the cell's displayed value while editing
@@ -142,7 +151,7 @@ class FieldTypeDelegate(QStyledItemDelegate):
                     selection-background-color: rgba(156, 39, 176, 0.5);
                     selection-color: #212121;
                 }
-                QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, 
+                QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus,
                 QComboBox:focus, QDateEdit:focus, QDateTimeEdit:focus {
                     border: none;
                     background-color: #ffffff;
@@ -170,14 +179,14 @@ class FieldTypeDelegate(QStyledItemDelegate):
                     selection-color: #424242;
                 }
             """)
-        
+
         return editor
-    
+
     def updateEditorGeometry(self, editor: QWidget, option, index: QModelIndex):
         """Update editor geometry to match cell exactly - stay within cell bounds"""
         # Position editor to exactly match the cell bounds - no overflow
         rect = option.rect
-        
+
         # Check if this cell is selected/current (has a border)
         view = None
         parent = self.parent()
@@ -186,13 +195,13 @@ class FieldTypeDelegate(QStyledItemDelegate):
                 view = parent
                 break
             parent = parent.parent() if hasattr(parent, 'parent') else None
-        
+
         is_selected_or_current = False
         if view and view.selectionModel():
             is_selected = view.selectionModel().isSelected(index)
             is_current = (index == view.currentIndex())
             is_selected_or_current = is_selected or is_current
-        
+
         # For text editors (including numeric fields now using QLineEdit)
         if isinstance(editor, (QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QDateEdit, QDateTimeEdit)):
             if is_selected_or_current:
@@ -205,11 +214,11 @@ class FieldTypeDelegate(QStyledItemDelegate):
         else:
             # For checkboxes and other widgets, use exact cell bounds
             editor.setGeometry(rect)
-    
+
     def setEditorData(self, editor: QWidget, index: QModelIndex):
         """Set editor value from model"""
         value = index.model().data(index, Qt.EditRole)
-        
+
         if isinstance(editor, QLineEdit):
             # For numeric fields, display the value as-is
             if self.field_type == "integer":
@@ -227,7 +236,7 @@ class FieldTypeDelegate(QStyledItemDelegate):
             else:
                 # Regular text field
                 editor.setText(str(value) if value else "")
-            
+
             # Select all text when editing starts so the first typed character replaces it
             editor.selectAll()
         elif isinstance(editor, QSpinBox):
@@ -256,7 +265,7 @@ class FieldTypeDelegate(QStyledItemDelegate):
                     else:
                         dt = value
                     editor.setDate(QDate(dt.year, dt.month, dt.day))
-                except:
+                except Exception:
                     editor.setDate(QDate.currentDate())
             else:
                 editor.setDate(QDate.currentDate())
@@ -269,7 +278,7 @@ class FieldTypeDelegate(QStyledItemDelegate):
                     else:
                         dt = value
                     editor.setDateTime(QDateTime(dt))
-                except:
+                except Exception:
                     editor.setDateTime(QDateTime.currentDateTime())
             else:
                 editor.setDateTime(QDateTime.currentDateTime())
@@ -289,7 +298,7 @@ class FieldTypeDelegate(QStyledItemDelegate):
             # Ensure combo box is enabled and can receive focus
             editor.setEnabled(True)
             editor.setFocus()
-    
+
     def setModelData(self, editor: QWidget, model: QAbstractItemModel, index: QModelIndex):
         """Set model value from editor"""
         if isinstance(editor, QLineEdit):
@@ -328,9 +337,9 @@ class FieldTypeDelegate(QStyledItemDelegate):
             value = editor.currentText()
         else:
             value = ""
-        
+
         model.setData(index, value, Qt.EditRole)
-    
+
     def editorEvent(self, event: QEvent, model: QAbstractItemModel, option, index: QModelIndex) -> bool:
         """Handle editor events - for checkboxes, toggle on click or spacebar"""
         if self.field_type == "checkbox":
@@ -339,21 +348,21 @@ class FieldTypeDelegate(QStyledItemDelegate):
                 # Toggle checkbox value
                 value = model.data(index, Qt.EditRole)
                 checked = False
-                
+
                 if isinstance(value, bool):
                     checked = value
                 elif isinstance(value, str):
                     checked = value.lower() in ("true", "1", "yes", "on")
                 else:
                     checked = bool(value)
-                
+
                 # Toggle the value
                 new_value = not checked
                 model.setData(index, new_value, Qt.EditRole)
                 return True
-        
+
         return super().editorEvent(event, model, option, index)
-    
+
     def _is_dark_mode(self, view):
         """Detect if we're in dark mode by checking table background color"""
         if not view:
@@ -361,13 +370,12 @@ class FieldTypeDelegate(QStyledItemDelegate):
         bg_color = view.palette().color(view.backgroundRole())
         # Dark mode typically has background RGB values < 128
         return bg_color.red() < 128 and bg_color.green() < 128 and bg_color.blue() < 128
-    
+
     def paint(self, painter: QPainter, option, index: QModelIndex):
         """Custom paint for checkbox fields and selected cell borders"""
         # Disable default focus indicator (dotted rectangle around text)
-        from PySide6.QtWidgets import QStyle
         option.state &= ~QStyle.State_HasFocus
-        
+
         # Check if this cell is selected/current - we'll draw border after parent paint
         view = None
         parent = self.parent()
@@ -376,39 +384,39 @@ class FieldTypeDelegate(QStyledItemDelegate):
                 view = parent
                 break
             parent = parent.parent() if hasattr(parent, 'parent') else None
-        
+
         should_draw_border = False
         if view and view.selectionModel():
             is_selected = view.selectionModel().isSelected(index)
             is_current = (index == view.currentIndex())
             should_draw_border = (is_selected or is_current)
-        
+
         if self.field_type == "checkbox":
             value = index.model().data(index, Qt.DisplayRole)
             checked = False
-            
+
             if isinstance(value, bool):
                 checked = value
             elif isinstance(value, str):
                 checked = value.lower() in ("true", "1", "yes", "on")
             else:
                 checked = bool(value)
-            
+
             # Enable anti-aliasing for smoother rendering
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-            
+
             # Draw checkbox - ensure it fits within cell bounds
             cell_rect = option.rect
             checkbox_size = min(20, min(cell_rect.width() - 4, cell_rect.height() - 4))  # Leave 2px padding on each side
             checkbox_size = max(16, checkbox_size)  # Minimum 16px for visibility
-            
+
             checkbox_rect = cell_rect
             checkbox_rect.setWidth(checkbox_size)
             checkbox_rect.setHeight(checkbox_size)
             checkbox_rect.moveLeft(cell_rect.left() + (cell_rect.width() - checkbox_size) // 2)
             checkbox_rect.moveTop(cell_rect.top() + (cell_rect.height() - checkbox_size) // 2)
-            
+
             checkbox_option = QStyleOptionButton()
             checkbox_option.rect = checkbox_rect
             checkbox_option.state = QStyle.StateFlag.State_Enabled
@@ -416,12 +424,12 @@ class FieldTypeDelegate(QStyledItemDelegate):
                 checkbox_option.state |= QStyle.StateFlag.State_On
             else:
                 checkbox_option.state |= QStyle.StateFlag.State_Off
-            
+
             QApplication.style().drawControl(QStyle.ControlElement.CE_CheckBox, checkbox_option, painter)
         else:
             # Default painting for other types
             super().paint(painter, option, index)
-        
+
         # Draw border AFTER parent paint so it appears on top (for both checkbox and other field types)
         if should_draw_border:
             painter.save()
@@ -440,23 +448,23 @@ class FieldTypeDelegate(QStyledItemDelegate):
 
 class ValidationErrorDelegate(QStyledItemDelegate):
     """Delegate that highlights validation errors"""
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.error_cells = {}  # {(row, col): error_message}
-    
+
     def set_error(self, row: int, col: int, message: str):
         """Mark a cell as having an error"""
         self.error_cells[(row, col)] = message
-    
+
     def clear_error(self, row: int, col: int):
         """Clear error for a cell"""
         self.error_cells.pop((row, col), None)
-    
+
     def clear_all_errors(self):
         """Clear all errors"""
         self.error_cells.clear()
-    
+
     def _is_dark_mode(self, view):
         """Detect if we're in dark mode by checking table background color"""
         if not view:
@@ -464,13 +472,12 @@ class ValidationErrorDelegate(QStyledItemDelegate):
         bg_color = view.palette().color(view.backgroundRole())
         # Dark mode typically has background RGB values < 128
         return bg_color.red() < 128 and bg_color.green() < 128 and bg_color.blue() < 128
-    
+
     def paint(self, painter: QPainter, option, index: QModelIndex):
         """Paint with error highlighting and selected cell border"""
         # Disable default focus indicator (dotted rectangle around text)
-        from PySide6.QtWidgets import QStyle
         option.state &= ~QStyle.State_HasFocus
-        
+
         # Check if this cell is selected/current and draw border
         view = None
         parent = self.parent()
@@ -479,11 +486,11 @@ class ValidationErrorDelegate(QStyledItemDelegate):
                 view = parent
                 break
             parent = parent.parent() if hasattr(parent, 'parent') else None
-        
+
         if view and view.selectionModel():
             is_selected = view.selectionModel().isSelected(index)
             is_current = (index == view.currentIndex())
-            
+
             if is_selected or is_current:
                 # Draw border around entire cell
                 painter.save()
@@ -498,11 +505,11 @@ class ValidationErrorDelegate(QStyledItemDelegate):
                 border_rect = option.rect.adjusted(1, 1, -1, -1)
                 painter.drawRect(border_rect)
                 painter.restore()
-        
+
         # Check if this cell has an error
         row = index.row()
         col = index.column()
-        
+
         if (row, col) in self.error_cells:
             # Draw red border
             painter.save()
@@ -510,6 +517,6 @@ class ValidationErrorDelegate(QStyledItemDelegate):
             painter.setBrush(QColor(255, 240, 240, 100))
             painter.drawRect(option.rect)
             painter.restore()
-        
+
         # Call parent paint
         super().paint(painter, option, index)

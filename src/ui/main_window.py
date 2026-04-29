@@ -1,47 +1,45 @@
 """Main application window"""
 
 from pathlib import Path
-from typing import Optional, Dict, List, Any
+from typing import Any
 
+from PySide6.QtCore import QEvent, QSize, Qt
+from PySide6.QtGui import QAction, QIcon, QKeySequence, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
-    QMainWindow,
-    QWidget,
-    QVBoxLayout,
+    QAbstractItemView,
+    QFrame,
     QHBoxLayout,
-    QSplitter,
+    QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QPushButton,
-    QToolBar,
-    QStatusBar,
-    QLineEdit,
-    QLabel,
+    QMainWindow,
     QMessageBox,
-    QAbstractItemView,
+    QPushButton,
     QSizePolicy,
-    QFrame,
+    QSplitter,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
 )
-from PySide6.QtGui import QMouseEvent
-from PySide6.QtCore import Qt, Signal, QSize, QEvent
-from PySide6.QtGui import QAction, QIcon, QKeySequence, QPixmap
 
-from src.core.config import Config
-from src.core.workspace import Workspace
 from src.core.collection_store import CollectionStore
+from src.core.config import Config
 from src.core.resource_path import asset_path, get_quartz_icon_path
+from src.core.update_checker import UpdateCheckWorker
 from src.core.version import VERSION
-from src.core.update_checker import UpdateChecker, UpdateCheckWorker
-from src.ui.table_view import TableView
+from src.core.workspace import Workspace
+from src.ui.advanced_search_dialog import AdvancedSearchDialog
 from src.ui.form_view import FormView
 from src.ui.styles import AppStyles
-from src.ui.advanced_search_dialog import AdvancedSearchDialog
+from src.ui.table_view import TableView
 from src.ui.update_dialog import UpdateDialog
 from src.ui.update_progress_dialog import UpdateProgressDialog
 
 
 class CollectionsListWidget(QListWidget):
     """Custom QListWidget that prevents selection on right-click and supports drag and drop"""
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._right_click_selected_row = -1
@@ -52,7 +50,7 @@ class CollectionsListWidget(QListWidget):
         self.setDragDropOverwriteMode(False)
         # Set movement threshold - higher value means clicks register faster
         # Qt's default is usually 4-10 pixels, we'll use a reasonable default
-    
+
     def mousePressEvent(self, event: QMouseEvent):
         """Override to prevent selection on right-click"""
         if event.button() == Qt.RightButton:
@@ -62,27 +60,27 @@ class CollectionsListWidget(QListWidget):
                 self._right_click_selected_row = self.currentRow()
             else:
                 self._right_click_selected_row = -1
-            
+
             # Call parent to show context menu, but block selection
             self.blockSignals(True)
             super().mousePressEvent(event)
-            
+
             # Immediately restore selection
             if self._right_click_selected_row >= 0 and self._right_click_selected_row < self.count():
                 self.setCurrentRow(self._right_click_selected_row)
-            
+
             self.blockSignals(False)
         else:
             # For left clicks, process immediately - Qt's InternalMove will handle drag detection
             # without delaying clicks
             super().mousePressEvent(event)
-    
+
     def startDrag(self, supportedActions):
         """Override to only start drag after actual mouse movement"""
         # Let Qt handle the drag start - it already checks for movement
         # This override ensures clicks are processed immediately
         super().startDrag(supportedActions)
-    
+
     def dropEvent(self, event):
         """Handle drop event to save new collection order"""
         super().dropEvent(event)
@@ -98,33 +96,31 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.config = config
         self.workspace = Workspace(config.workspace_path)
-        self.current_collection: Optional[str] = None
-        self.current_store: Optional[CollectionStore] = None
-        
+        self.current_collection: str | None = None
+        self.current_store: CollectionStore | None = None
+
         # Store filters and sorting per collection
-        self.collection_filters: Dict[str, str] = {}  # collection_name -> search_query
-        self.collection_sorting: Dict[str, tuple] = {}  # collection_name -> (column, order)
-        
+        self.collection_filters: dict[str, str] = {}  # collection_name -> search_query
+        self.collection_sorting: dict[str, tuple] = {}  # collection_name -> (column, order)
+
         # Active filters (list of filter dicts: {field/text, operator, value})
-        self.active_filters: List[Dict] = []
-        
+        self.active_filters: list[dict] = []
+
         # Form lock state (starts unlocked)
         self.form_locked = False
-        
+
         # Undo/Redo history
         self.undo_history: list = []  # List of commands that can be undone
         self.redo_history: list = []  # List of commands that can be redone
         self.max_history = 50  # Maximum number of undo/redo steps
-        
+
         # Update check threads (for proper lifecycle management)
         self.update_check_threads: list = []  # Keep references to prevent garbage collection
-        
+
         # Icon cache to avoid reloading icons on every refresh
-        self._icon_cache: Dict[str, QIcon] = {}
+        self._icon_cache: dict[str, QIcon] = {}
 
         # Set window icon
-        from PySide6.QtGui import QIcon
-
         icon_path = get_quartz_icon_path()
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
@@ -135,10 +131,10 @@ class MainWindow(QMainWindow):
         self._apply_theme()
         self._init_ui()
         self._load_collections()
-        
+
         # Apply initial view settings
         self._apply_view_settings()
-        
+
         # Check for updates on startup if enabled
         if self.config.get("auto_check_for_updates", False):
             from PySide6.QtCore import QTimer
@@ -149,7 +145,7 @@ class MainWindow(QMainWindow):
         """Apply theme stylesheet"""
         # Support new theme system with color_scheme and mode
         color_scheme = self.config.get("color_scheme", "default")
-        
+
         # Check if mode is explicitly set in config, otherwise use default or migrate from old theme
         if "mode" in self.config.data:
             mode = self.config.get("mode", "light")
@@ -162,7 +158,7 @@ class MainWindow(QMainWindow):
                 self.config.set("mode", mode)
             else:
                 mode = "light"
-        
+
         stylesheet = AppStyles.get_theme(color_scheme=color_scheme, mode=mode)
         self.setStyleSheet(stylesheet)
 
@@ -189,7 +185,7 @@ class MainWindow(QMainWindow):
 
         # Sidebar header
         sidebar_header = QHBoxLayout()
-        
+
         # Add collection button (left side)
         add_collection_btn = QPushButton()
         add_collection_btn.setIcon(QIcon(str(asset_path("create_collection.png"))))
@@ -212,10 +208,10 @@ class MainWindow(QMainWindow):
         )  # Disabled until collection selected
         self.delete_collection_btn.clicked.connect(self._delete_selected_collection)
         sidebar_header.addWidget(self.delete_collection_btn)
-        
+
         # Add stretch to push Collections label to center
         sidebar_header.addStretch()
-        
+
         # Collections label (centered and bold)
         collections_label = QLabel("Collections")
         collections_label.setAlignment(Qt.AlignCenter)
@@ -223,7 +219,7 @@ class MainWindow(QMainWindow):
         font.setBold(True)
         collections_label.setFont(font)
         sidebar_header.addWidget(collections_label)
-        
+
         # Add stretch on the right to keep it centered
         sidebar_header.addStretch()
 
@@ -331,7 +327,7 @@ class MainWindow(QMainWindow):
         self.search_box.textChanged.connect(self._on_search)
         self.search_box.setMinimumWidth(250)
         top_bar.addWidget(self.search_box)
-        
+
         # Filter button
         filter_icon_path = asset_path("filter.png")
         self.filter_btn = QPushButton()
@@ -343,7 +339,7 @@ class MainWindow(QMainWindow):
         self.filter_btn.setIconSize(QSize(16, 16))
         self.filter_btn.clicked.connect(self._open_filter_dialog)
         top_bar.addWidget(self.filter_btn)
-        
+
         # Advanced search button
         adv_icon_path = asset_path("adv.png")
         self.adv_search_btn = QPushButton()
@@ -357,10 +353,9 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.adv_search_btn)
 
         right_layout.addWidget(self.top_bar_widget)
-        
+
         # Filter chips container (below search bar)
-        from PySide6.QtWidgets import QScrollArea, QFrame
-        
+
         self.filter_chips_container = QWidget()
         self.filter_chips_layout = QHBoxLayout(self.filter_chips_container)
         self.filter_chips_layout.setContentsMargins(8, 4, 8, 4)
@@ -370,7 +365,7 @@ class MainWindow(QMainWindow):
         # Allow wrapping of filter chips
         self.filter_chips_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         right_layout.addWidget(self.filter_chips_container)
-        
+
         # Install event filter on top_bar_widget to detect clicks on empty space
         self.top_bar_widget.installEventFilter(self)
 
@@ -418,7 +413,7 @@ class MainWindow(QMainWindow):
         # Status bar
         status_bar = self.statusBar()
         status_bar.showMessage("Ready")
-        
+
         # Add version label to status bar (right side)
         version_label = QLabel(f"v{VERSION}")
         version_label.setStyleSheet("""
@@ -567,7 +562,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.lock_form_action)
         # Store widget reference for compact view
         self.lock_form_widget = toolbar.widgetForAction(self.lock_form_action)
-        
+
         # Apply compact view settings (after all widgets are created)
         self._update_compact_view()
 
@@ -581,7 +576,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(settings_action)
 
         # Overflow indicator (shows when toolbar items are hidden due to window size)
-        from PySide6.QtWidgets import QToolButton, QMenu
+        from PySide6.QtWidgets import QMenu, QToolButton
         self.overflow_button = QToolButton()
         self.overflow_button.setText("⋯")  # Horizontal ellipsis
         self.overflow_button.setToolTip("More options (hidden toolbar items)")
@@ -605,9 +600,9 @@ class MainWindow(QMainWindow):
         self.overflow_menu = QMenu(self.overflow_button)
         self.overflow_button.setMenu(self.overflow_menu)
         toolbar.addWidget(self.overflow_button)
-        
+
         parent_layout.addWidget(toolbar)
-        
+
         # Check overflow after window is shown and on layout changes
         from PySide6.QtCore import QTimer
         QTimer.singleShot(300, self._check_toolbar_overflow)
@@ -649,32 +644,32 @@ class MainWindow(QMainWindow):
 
         # View menu
         view_menu = menubar.addMenu("View")
-        
+
         compact_view_action = QAction("Compact View", self)
         compact_view_action.setCheckable(True)
         compact_view_action.setChecked(self.config.get("compact_view", False))
         compact_view_action.triggered.connect(self._toggle_compact_view)
         self.compact_view_action = compact_view_action
         view_menu.addAction(compact_view_action)
-        
+
         visible_collection_panel_action = QAction("Visible Collection Panel", self)
         visible_collection_panel_action.setCheckable(True)
         visible_collection_panel_action.setChecked(self.config.get("visible_collection_panel", True))
         visible_collection_panel_action.triggered.connect(self._toggle_collection_panel)
         self.visible_collection_panel_action = visible_collection_panel_action
         view_menu.addAction(visible_collection_panel_action)
-        
+
         view_menu.addSeparator()
-        
+
         show_key_action = QAction("Show Key", self)
         show_key_action.setCheckable(True)
         show_key_action.setChecked(self.config.get("show_key_column", True))
         show_key_action.triggered.connect(self._toggle_show_key)
         self.show_key_action = show_key_action
         view_menu.addAction(show_key_action)
-        
+
         view_menu.addSeparator()
-        
+
         expanded_view_action = QAction("Expanded View", self)
         expanded_view_action.setCheckable(True)
         expanded_view_action.setChecked(self.config.get("expanded_view", False))
@@ -706,13 +701,13 @@ class MainWindow(QMainWindow):
         preferences_action = QAction("Preferences...", self)
         preferences_action.triggered.connect(self._show_settings)
         tools_menu.addAction(preferences_action)
-        
+
         tools_menu.addSeparator()
-        
+
         check_update_action = QAction("Check for Updates...", self)
         check_update_action.triggered.connect(self._manual_check_for_updates)
         tools_menu.addAction(check_update_action)
-        
+
         # Placeholder action for Ctrl+F (currently does nothing)
         placeholder_action = QAction("Search (Placeholder)", self)
         placeholder_action.setShortcut(QKeySequence("Ctrl+F"))
@@ -728,7 +723,7 @@ class MainWindow(QMainWindow):
             # Load collection icon if available (with caching)
             icon_path = self.workspace.get_collection_icon_path(name)
             cache_key = f"collection_{name}"
-            
+
             if cache_key not in self._icon_cache:
                 if icon_path and icon_path.exists():
                     pixmap = QPixmap(str(icon_path))
@@ -751,7 +746,7 @@ class MainWindow(QMainWindow):
                                 self._icon_cache["default"] = QIcon(scaled_pixmap)
                     if "default" in self._icon_cache:
                         self._icon_cache[cache_key] = self._icon_cache["default"]
-            
+
             if cache_key in self._icon_cache:
                 item.setIcon(self._icon_cache[cache_key])
 
@@ -765,7 +760,7 @@ class MainWindow(QMainWindow):
             item = self.collections_list.item(i)
             if item:
                 collection_names.append(item.text())
-        
+
         # Save the new order to workspace (async to avoid blocking UI)
         if collection_names:
             from PySide6.QtCore import QTimer
@@ -787,10 +782,10 @@ class MainWindow(QMainWindow):
         else:
             current_item = self.collections_list.currentItem()
             selected_row = self.collections_list.currentRow() if current_item else -1
-        
+
         clicked_collection_name = item.text()
         was_currently_selected = (current_item and current_item.text() == clicked_collection_name)
-        
+
         # Store the actual selected collection name for restoration
         selected_collection_name = current_item.text() if current_item else None
 
@@ -839,9 +834,9 @@ class MainWindow(QMainWindow):
 
         # Block signals temporarily to prevent selection change from triggering events
         self.collections_list.blockSignals(True)
-        
+
         menu.exec(self.collections_list.mapToGlobal(position))
-        
+
         # Restore selection if Qt automatically selected a different collection on right-click
         # Use row index for more reliable restoration
         if not was_currently_selected and selected_row >= 0:
@@ -856,10 +851,10 @@ class MainWindow(QMainWindow):
             elif current_item:
                 # Last resort: stored item reference
                 self.collections_list.setCurrentItem(current_item)
-        
+
         # Unblock signals after restoring selection
         self.collections_list.blockSignals(False)
-        
+
         # Reset the stored row
         self._right_click_selected_row = -1
 
@@ -931,23 +926,23 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Info", "Please select a collection first")
             return
         self._show_relational_join(self.current_collection)
-    
+
     def _show_relational_join(self, collection_name: str):
         """Show relational join dialog"""
         from src.ui.relational_join_dialog import RelationalJoinDialog
-        
+
         dialog = RelationalJoinDialog(self, source_collection=collection_name, workspace=self.workspace)
-        
+
         if dialog.exec():
             rel_data = dialog.get_relationship_data()
-            
+
             try:
                 # Get source collection store
                 source_info = self.workspace.get_collection_info(rel_data["source_collection"])
                 source_db = self.workspace.workspace_path / source_info.db_path
                 source_store = CollectionStore(source_db)
                 source_store.connect()
-                
+
                 # Add relationship to source collection's database
                 source_store.add_relationship(
                     relationship_name=rel_data["name"],
@@ -958,9 +953,9 @@ class MainWindow(QMainWindow):
                     relationship_type=rel_data["type"],
                     cascade_delete=rel_data["cascade_delete"]
                 )
-                
+
                 source_store.close()
-                
+
                 QMessageBox.information(
                     self, "Success",
                     f"Relationship '{rel_data['name']}' created successfully!\n\n"
@@ -974,12 +969,12 @@ class MainWindow(QMainWindow):
     def _merge_collection_into(self, source_name: str):
         """Merge one collection into another"""
         from PySide6.QtWidgets import QInputDialog
-        
+
         collections = [c for c in self.workspace.list_collections() if c != source_name]
         if not collections:
             QMessageBox.information(self, "Info", "No other collections available to merge into")
             return
-        
+
         target_name, ok = QInputDialog.getItem(
             self,
             "Merge Collection",
@@ -988,7 +983,7 @@ class MainWindow(QMainWindow):
             0,
             False
         )
-        
+
         if ok and target_name:
             reply = QMessageBox.question(
                 self,
@@ -999,7 +994,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
             )
-            
+
             if reply == QMessageBox.Yes:
                 try:
                     # Get source store
@@ -1007,20 +1002,20 @@ class MainWindow(QMainWindow):
                     source_db = self.workspace.workspace_path / source_info.db_path
                     source_store = CollectionStore(source_db)
                     source_store.connect()
-                    
+
                     # Get target store
                     target_info = self.workspace.get_collection_info(target_name)
                     target_db = self.workspace.workspace_path / target_info.db_path
                     target_store = CollectionStore(target_db)
                     target_store.connect()
-                    
+
                     # Check for conflicts
                     conflicts = self._detect_merge_conflicts(source_store, target_store)
-                    
+
                     # Show conflict resolution dialog if conflicts exist
                     resolutions = {}
-                    if (conflicts.get("field_conflicts") or 
-                        conflicts.get("field_alias_conflicts") or 
+                    if (conflicts.get("field_conflicts") or
+                        conflicts.get("field_alias_conflicts") or
                         conflicts.get("record_id_conflicts")):
                         from src.ui.merge_conflict_dialog import MergeConflictDialog
                         conflict_dialog = MergeConflictDialog(self, conflicts)
@@ -1030,23 +1025,23 @@ class MainWindow(QMainWindow):
                             target_store.close()
                             return
                         resolutions = conflict_dialog.get_resolutions()
-                    
+
                     # Resolve field conflicts and copy fields
                     source_fields = source_store.list_fields()
                     target_fields = {f["key"]: f for f in target_store.list_fields()}
                     field_key_mapping = {}  # Map old key to new key
-                    
+
                     for field in source_fields:
                         field_key = field["key"]
                         original_key = field_key
-                        
+
                         # Check for alias conflict first
-                        source_alias = field.get("alias", field.get("label", ""))
+                        field.get("alias", field.get("label", ""))
                         resolution_alias_key = f"alias_{field_key}"
                         if resolution_alias_key in resolutions:
                             resolution = resolutions[resolution_alias_key]
                             action = resolution["action"]
-                            
+
                             if action == "Keep Separate (Rename Source)":
                                 new_key = resolution.get("new_key", f"{field_key}_merged")
                                 field_key_mapping[original_key] = new_key
@@ -1059,7 +1054,7 @@ class MainWindow(QMainWindow):
                                 # Skip adding field, use existing target field
                                 if field_key in target_fields:
                                     continue
-                        
+
                         # Check if field conflict exists (same key)
                         if field_key in target_fields:
                             # Field conflict - check resolution
@@ -1067,7 +1062,7 @@ class MainWindow(QMainWindow):
                             if resolution_key in resolutions:
                                 resolution = resolutions[resolution_key]
                                 action = resolution["action"]
-                                
+
                                 if action == "Skip (Keep Target)":
                                     # Skip this field, don't copy
                                     continue
@@ -1088,7 +1083,7 @@ class MainWindow(QMainWindow):
                             else:
                                 # No resolution provided, skip
                                 continue
-                        
+
                         # Add field if it doesn't exist or was renamed
                         if field_key not in target_fields:
                             # Use alias if available, otherwise label
@@ -1103,13 +1098,13 @@ class MainWindow(QMainWindow):
                                 options=field.get("options"),
                                 indexed=field.get("indexed", False)
                             )
-                    
+
                     # Copy records with conflict handling
                     source_records = source_store.list_records()
                     target_record_ids = {r["id"] for r in target_store.list_records()}
                     records_merged = 0
                     records_skipped = 0
-                    
+
                     for record in source_records:
                         # Check for ID conflict
                         source_id = record.get("id")
@@ -1117,66 +1112,66 @@ class MainWindow(QMainWindow):
                             # ID conflict - record will get new ID when added
                             # This is expected and handled automatically
                             pass
-                        
+
                         # Map field keys if needed
                         data = {}
                         for old_key, value in record.items():
                             if old_key in ("id", "record_uuid", "created_at", "updated_at"):
                                 continue
-                            
+
                             # Use mapped key if field was renamed
                             new_key = field_key_mapping.get(old_key, old_key)
-                            
+
                             # Only include if field exists in target
                             if new_key in [f["key"] for f in target_store.list_fields()]:
                                 data[new_key] = value
-                        
+
                         # Add record (will get new ID automatically)
                         try:
                             target_store.add_record(data)
                             records_merged += 1
-                        except Exception as e:
+                        except Exception:
                             records_skipped += 1
                             # Continue with next record
-                    
+
                     source_store.close()
                     target_store.close()
-                    
+
                     # Refresh if target is current collection
                     if self.current_collection == target_name:
                         self._open_collection(target_name)
-                    
+
                     message = f"Merged {records_merged} record(s) from '{source_name}' into '{target_name}'"
                     if records_skipped > 0:
                         message += f"\n{records_skipped} record(s) were skipped due to errors."
                     QMessageBox.information(self, "Success", message)
                 except Exception as e:
                     QMessageBox.warning(self, "Error", f"Failed to merge collections: {str(e)}")
-    
-    def _detect_merge_conflicts(self, source_store: CollectionStore, target_store: CollectionStore) -> Dict:
+
+    def _detect_merge_conflicts(self, source_store: CollectionStore, target_store: CollectionStore) -> dict:
         """Detect conflicts between source and target collections"""
         conflicts = {
             "field_conflicts": [],
             "field_alias_conflicts": [],
             "record_id_conflicts": []
         }
-        
+
         # Check for field conflicts (same key)
         source_fields = {f["key"]: f for f in source_store.list_fields()}
         target_fields = {f["key"]: f for f in target_store.list_fields()}
         target_fields_by_alias = {f.get("alias", f.get("label", "")): f for f in target_store.list_fields()}
-        
+
         for field_key, source_field in source_fields.items():
             if field_key in target_fields:
                 # Field conflict - same key but might have different properties
                 target_field = target_fields[field_key]
-                
+
                 # Check if properties differ
                 source_alias = source_field.get("alias", source_field.get("label", ""))
                 target_alias = target_field.get("alias", target_field.get("label", ""))
                 source_type = source_field.get("type", "")
                 target_type = target_field.get("type", "")
-                
+
                 conflicts["field_conflicts"].append({
                     "key": field_key,
                     "source": source_field,
@@ -1196,20 +1191,20 @@ class MainWindow(QMainWindow):
                         "source": source_field,
                         "target": target_field
                     })
-        
+
         # Check for record ID conflicts
         source_records = source_store.list_records()
         target_record_ids = {r["id"] for r in target_store.list_records()}
-        
+
         conflicting_ids = []
         for record in source_records:
             record_id = record.get("id")
             if record_id and record_id in target_record_ids:
                 conflicting_ids.append(record_id)
-        
+
         if conflicting_ids:
             conflicts["record_id_conflicts"] = conflicting_ids
-        
+
         return conflicts
 
     def _import_foreign_keys(self, target_collection: str, source_collection: str):
@@ -1220,33 +1215,33 @@ class MainWindow(QMainWindow):
             source_db = self.workspace.workspace_path / source_info.db_path
             source_store = CollectionStore(source_db)
             source_store.connect()
-            
+
             # Get target store
             target_info = self.workspace.get_collection_info(target_collection)
             target_db = self.workspace.workspace_path / target_info.db_path
             target_store = CollectionStore(target_db)
             target_store.connect()
-            
+
             # Get source fields
             source_fields = source_store.list_fields()
-            
+
             # Show dialog to select which fields to import as foreign keys
-            from PySide6.QtWidgets import QDialog, QVBoxLayout, QCheckBox, QPushButton, QLabel
-            
+            from PySide6.QtWidgets import QCheckBox, QDialog, QLabel, QPushButton, QVBoxLayout
+
             dialog = QDialog(self)
             dialog.setWindowTitle(f"Import Foreign Keys from '{source_collection}'")
             dialog.setMinimumWidth(400)
             layout = QVBoxLayout(dialog)
-            
+
             layout.addWidget(QLabel(f"Select fields from '{source_collection}' to import as foreign keys:"))
-            
+
             checkboxes = {}
             for field in source_fields:
                 field_label = field.get('alias', field.get('label', ''))
                 cb = QCheckBox(f"{field_label} ({field['key']}) - {field['type']}")
                 checkboxes[field['key']] = (cb, field)
                 layout.addWidget(cb)
-            
+
             button_layout = QHBoxLayout()
             ok_btn = QPushButton("Import")
             cancel_btn = QPushButton("Cancel")
@@ -1257,7 +1252,7 @@ class MainWindow(QMainWindow):
             button_layout.addWidget(cancel_btn)
             button_layout.addWidget(ok_btn)
             layout.addLayout(button_layout)
-            
+
             if dialog.exec():
                 imported = 0
                 for field_key, (cb, field) in checkboxes.items():
@@ -1265,7 +1260,7 @@ class MainWindow(QMainWindow):
                         # Create foreign key field in target collection
                         # Use a prefix to avoid conflicts
                         target_key = f"{source_collection}_{field_key}"
-                        
+
                         # Check if field already exists
                         existing_fields = {f["key"]: f for f in target_store.list_fields()}
                         if target_key not in existing_fields:
@@ -1277,7 +1272,7 @@ class MainWindow(QMainWindow):
                                 label=f"{field_alias} (from {source_collection})",
                                 required=False
                             )
-                            
+
                             # Create a relationship automatically
                             relationship_name = f"{source_collection}_{field_key}_to_{target_collection}_{target_key}"
                             try:
@@ -1293,24 +1288,24 @@ class MainWindow(QMainWindow):
                             except Exception:
                                 # Relationship might already exist, ignore
                                 pass
-                            
+
                             imported += 1
-                
+
                 source_store.close()
                 target_store.close()
-                
+
                 # Refresh if target is current collection
                 if self.current_collection == target_collection:
                     self._open_collection(target_collection)
-                
+
                 QMessageBox.information(
-                    self, "Success", 
+                    self, "Success",
                     f"Imported {imported} foreign key field(s) from '{source_collection}'"
                 )
             else:
                 source_store.close()
                 target_store.close()
-                
+
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to import foreign keys: {str(e)}")
 
@@ -1399,29 +1394,29 @@ class MainWindow(QMainWindow):
 
                 config = Config()
                 backup_enabled = config.get("backup_enabled", True)
-                
+
                 # Process events to ensure connection is fully closed
                 from PySide6.QtWidgets import QApplication
                 QApplication.processEvents()
-                
+
                 self.workspace.delete_collection(name, backup=backup_enabled)
-                
+
                 # Clear icon cache for deleted collection
                 cache_key = f"collection_{name}"
                 if cache_key in self._icon_cache:
                     del self._icon_cache[cache_key]
-                
+
                 # Immediately refresh the collections list
                 self._load_collections()
-                
+
                 # Force update of the list widget to ensure it refreshes
                 self.collections_list.update()
                 self.collections_list.repaint()
-                
+
                 # Deselect any collection if the deleted one was selected
                 if self.current_collection == name:
                     self._deselect_collection()
-                
+
                 self.statusBar().showMessage(f"Deleted collection: {name}")
             except ValueError as e:
                 QMessageBox.warning(self, "Error", str(e))
@@ -1434,7 +1429,7 @@ class MainWindow(QMainWindow):
         self._open_collection(collection_name)
         # Enable delete button
         self.delete_collection_btn.setEnabled(True)
-    
+
     def _on_collection_selection_changed(self):
         """Handle collection selection changes (including deselection)"""
         # If we're in a right-click, restore the original selection and don't process the change
@@ -1444,11 +1439,11 @@ class MainWindow(QMainWindow):
                 self.collections_list.setCurrentRow(self._right_click_selected_row)
                 self.collections_list.blockSignals(False)
             return
-        
+
         # If no item is selected, deselect collection
         if not self.collections_list.currentItem():
             self._deselect_collection()
-    
+
     def _deselect_collection(self):
         """Deselect the current collection"""
         # Close current store
@@ -1456,14 +1451,14 @@ class MainWindow(QMainWindow):
             self.current_store.close()
         self.current_store = None
         self.current_collection = None
-        
+
         # Clear views
         self.table_view.model.set_collection(None, [])
         self.form_view.set_collection(None, [])
-        
+
         # Show empty state
         self.content_stack.setCurrentIndex(0)  # Empty state widget
-        
+
         # Update UI
         self.setWindowTitle("Quartz")
         self.nav_label.setText("No collection")
@@ -1480,10 +1475,10 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'join_action'):
             self.join_action.setEnabled(False)
         self.statusBar().showMessage("No collection selected")
-        
+
         # Clear search (but don't clear saved filter - it will be restored when collection is reopened)
         self.search_box.clear()
-        
+
         # Clear current filter from model
         if hasattr(self, 'table_view') and hasattr(self.table_view, 'model'):
             model = self.table_view.model
@@ -1524,26 +1519,26 @@ class MainWindow(QMainWindow):
         fields = self.current_store.list_fields()
         self.table_view.set_collection(self.current_store, fields)
         self.form_view.set_collection(self.current_store, fields)
-        
+
         # Switch to table or form view (not empty state)
         # Index 1 = table view, Index 2 = form view
         if hasattr(self, 'form_toggle') and self.form_toggle.isChecked():
             self.content_stack.setCurrentIndex(2)  # Form view
         else:
             self.content_stack.setCurrentIndex(1)  # Table view
-        
+
         # Apply table view settings
         self._apply_table_view_settings()
-        
+
         # Apply key column visibility setting
         show_key = self.config.get("show_key_column", True)
         self.table_view.setColumnHidden(0, not show_key)
 
         # Restore saved filter and sorting for this collection
         if not hasattr(self, 'collection_filters'):
-            self.collection_filters: Dict[str, str] = {}
-            self.collection_sorting: Dict[str, tuple] = {}
-        
+            self.collection_filters: dict[str, str] = {}
+            self.collection_sorting: dict[str, tuple] = {}
+
         saved_query = self.collection_filters.get(name, "")
         if saved_query:
             self.search_box.setText(saved_query)
@@ -1562,11 +1557,11 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Opened collection: {name}")
         # Enable delete button
         self.delete_collection_btn.setEnabled(True)
-        
+
         # Enable import action (collection is selected)
         if hasattr(self, 'import_action'):
             self.import_action.setEnabled(True)
-        
+
         # Enable field actions
         if hasattr(self, 'add_field_action'):
             self.add_field_action.setEnabled(True)
@@ -1592,7 +1587,7 @@ class MainWindow(QMainWindow):
         # Only switch if a collection is selected
         if not self.current_store:
             return
-        
+
         # Map: 0 = table view (stack index 1), 1 = form view (stack index 2)
         stack_index = index + 1  # 0 -> 1 (table), 1 -> 2 (form)
         self.content_stack.setCurrentIndex(stack_index)
@@ -1641,7 +1636,7 @@ class MainWindow(QMainWindow):
 
         # Save filter for this collection
         if not hasattr(self, 'collection_filters'):
-            self.collection_filters: Dict[str, str] = {}
+            self.collection_filters: dict[str, str] = {}
         self.collection_filters[self.current_collection] = query
 
         # Get all records (either all or filtered by text search)
@@ -1659,11 +1654,11 @@ class MainWindow(QMainWindow):
             else:
                 # No text query, start with all records
                 model.filtered_records = model.records.copy() if model.records else []
-            
+
             # Apply active filters (AND logic - all filters must match)
             if self.active_filters:
                 model.filtered_records = self._apply_filters(model.filtered_records)
-            
+
             # Store search query for virtualized mode
             model._search_query = query
 
@@ -1671,50 +1666,50 @@ class MainWindow(QMainWindow):
         model._formatted_cache.clear()
         model._record_cache.clear()
         model._loaded_batches.clear()
-        
+
         model.beginResetModel()
         model.endResetModel()
 
         # Update navigation
         self._update_navigation()
-    
-    def _apply_filters(self, records: List[Dict]) -> List[Dict]:
+
+    def _apply_filters(self, records: list[dict]) -> list[dict]:
         """Apply active filters to records (AND logic)"""
         model = self.table_view.model
         model._filter_error = None  # Clear any previous error
-        
+
         if not self.active_filters or not records:
             return records
-        
+
         # Validate filters first
         if not self.current_store:
             model._filter_error = "Cannot display information: No collection selected"
             return []
-        
+
         fields = self.current_store.list_fields()
         field_keys = {f["key"] for f in fields}
-        
+
         filtered = records
         for filter_item in self.active_filters:
             field_or_text = filter_item.get("field_or_text")
             operator = filter_item.get("operator")
             value = filter_item.get("value")
-            
+
             if not field_or_text or not operator:
                 model._filter_error = "Cannot display information: Invalid filter configuration"
                 return []
-            
+
             # Validate field exists (unless it's a text search)
             if field_or_text != "text" and field_or_text not in field_keys:
                 field_label = filter_item.get("field_label", field_or_text)
                 model._filter_error = f"Cannot display information: Field '{field_label}' does not exist"
                 return []
-            
+
             # Validate value is provided (unless operator is IS NULL or IS NOT NULL)
             if operator not in ("IS NULL", "IS NOT NULL") and (value is None or (isinstance(value, str) and not value.strip())):
                 model._filter_error = "Cannot display information: Filter value is required"
                 return []
-            
+
             # Filter the records
             new_filtered = []
             for record in filtered:
@@ -1733,11 +1728,11 @@ class MainWindow(QMainWindow):
                 else:
                     # Filter by specific field
                     field_value = record.get(field_or_text)
-                    
+
                     # Check if this is a checkbox/boolean field
                     field_info = next((f for f in self.current_store.list_fields() if f["key"] == field_or_text), None)
                     is_checkbox = field_info and field_info.get("type") == "checkbox"
-                    
+
                     if is_checkbox:
                         # Handle checkbox/boolean filtering
                         if self._match_checkbox_filter(field_value, operator, value):
@@ -1747,16 +1742,16 @@ class MainWindow(QMainWindow):
                         field_str = str(field_value) if field_value is not None else ""
                         if self._match_filter(field_str, operator, value):
                             new_filtered.append(record)
-            
+
             filtered = new_filtered
-        
+
         return filtered
-    
+
     def _match_filter(self, field_value: str, operator: str, filter_value: str) -> bool:
         """Check if field value matches filter criteria"""
         field_lower = field_value.lower()
         filter_lower = str(filter_value).lower()
-        
+
         if operator == "=" or operator == "IS":
             # Exact match (case-insensitive for strings, exact for numbers)
             try:
@@ -1797,17 +1792,17 @@ class MainWindow(QMainWindow):
                 return float(field_value) <= float(filter_value)
             except (ValueError, TypeError):
                 return False
-        
+
         return False
-    
+
     def _match_checkbox_filter(self, field_value: Any, operator: str, filter_value: str) -> bool:
         """Check if checkbox/boolean field value matches filter criteria"""
         # Normalize field value to boolean
         field_bool = self._normalize_to_bool(field_value)
-        
+
         # Normalize filter value to boolean
         filter_bool = self._normalize_to_bool(filter_value)
-        
+
         if operator == "=" or operator == "IS":
             return field_bool == filter_bool
         elif operator == "!=" or operator == "IS NOT":
@@ -1823,44 +1818,44 @@ class MainWindow(QMainWindow):
         else:
             # Comparison operators don't make sense for booleans
             return False
-    
+
     def _normalize_to_bool(self, value: Any) -> bool:
         """Normalize a value to boolean, accepting various formats"""
         if value is None:
             return False
-        
+
         # If already boolean
         if isinstance(value, bool):
             return value
-        
+
         # Convert to string and check common true/false representations
         value_str = str(value).lower().strip()
-        
+
         # True values
         if value_str in ("true", "1", "yes", "on", "checked", "✓", "☑"):
             return True
-        
+
         # False values
         if value_str in ("false", "0", "no", "off", "unchecked", "", "✗", "☐"):
             return False
-        
+
         # Try numeric conversion
         try:
             num = float(value_str)
             return num != 0
         except (ValueError, TypeError):
             pass
-        
+
         # Default: non-empty string is True
         return bool(value_str)
-    
+
     def _open_filter_dialog(self):
         """Open filter creation dialog"""
         if not self.current_store:
             return
-        
+
         from src.ui.filter_dialog import FilterDialog
-        
+
         dialog = FilterDialog(self, self.current_store)
         if dialog.exec():
             filter_item = dialog.get_filter()
@@ -1868,7 +1863,7 @@ class MainWindow(QMainWindow):
                 self.active_filters.append(filter_item)
                 self._update_filter_chips()
                 self._perform_search()
-    
+
     def _update_filter_chips(self):
         """Update the filter chips display"""
         # Clear existing chips
@@ -1876,30 +1871,30 @@ class MainWindow(QMainWindow):
             item = self.filter_chips_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        
+
         # Add chips for each active filter
         for i, filter_item in enumerate(self.active_filters):
             chip = self._create_filter_chip(filter_item, i)
             self.filter_chips_layout.insertWidget(self.filter_chips_layout.count() - 1, chip)
-        
+
         # Show/hide container based on whether there are filters
         self.filter_chips_container.setVisible(len(self.active_filters) > 0)
-    
-    def _create_filter_chip(self, filter_item: Dict, index: int):
+
+    def _create_filter_chip(self, filter_item: dict, index: int):
         """Create a filter chip widget"""
-        from PySide6.QtWidgets import QFrame, QLabel
-        
+        from PySide6.QtWidgets import QLabel
+
         chip = QFrame()
         chip.setProperty("class", "filter-chip")
         chip_layout = QHBoxLayout(chip)
         chip_layout.setContentsMargins(8, 4, 4, 4)
         chip_layout.setSpacing(6)
-        
+
         # Build filter text
         field_or_text = filter_item.get("field_or_text", "")
         operator = filter_item.get("operator", "")
         value = filter_item.get("value", "")
-        
+
         if field_or_text == "text":
             filter_text = f"Text {operator} {value}"
         else:
@@ -1914,7 +1909,7 @@ class MainWindow(QMainWindow):
                 else:
                     field_label = field_or_text  # Fallback to key if not found
             filter_text = f"{field_label} {operator} {value}"
-        
+
         # Label with ellipsis
         label = QLabel(filter_text)
         label.setProperty("class", "filter-chip-label")
@@ -1927,7 +1922,7 @@ class MainWindow(QMainWindow):
         elided_text = metrics.elidedText(filter_text, Qt.ElideRight, 200)
         label.setText(elided_text)
         chip_layout.addWidget(label)
-        
+
         # Remove icon - use QLabel with pixmap, not a button
         remove_icon_path = asset_path("removefilter.png")
         remove_label = QLabel()
@@ -1947,21 +1942,21 @@ class MainWindow(QMainWindow):
         # Make label clickable
         remove_label.mousePressEvent = lambda event, idx=index: self._remove_filter(idx)
         chip_layout.addWidget(remove_label)
-        
+
         return chip
-    
+
     def _remove_filter(self, index: int):
         """Remove a filter by index"""
         if 0 <= index < len(self.active_filters):
             self.active_filters.pop(index)
             self._update_filter_chips()
             self._perform_search()
-    
+
     def _open_advanced_search(self):
         """Open advanced search dialog"""
         dialog = AdvancedSearchDialog(self, self.workspace)
         dialog.exec()
-    
+
     def _open_collection_and_record(self, collection_name: str, record_id: int):
         """Open a specific collection and navigate to a specific record"""
         # Find and select the collection
@@ -1969,19 +1964,19 @@ class MainWindow(QMainWindow):
         if items:
             self.collections_list.setCurrentItem(items[0])
             self._open_collection(collection_name)
-            
+
             # Wait a bit for collection to load, then select the record
             from PySide6.QtCore import QTimer
             timer = QTimer()
             timer.setSingleShot(True)
             timer.timeout.connect(lambda: self._select_record_by_id(record_id))
             timer.start(100)  # 100ms delay
-    
+
     def _select_record_by_id(self, record_id: int):
         """Select a record by ID in the table view"""
         if not self.current_store or not self.table_view:
             return
-        
+
         model = self.table_view.model
         for row, record in enumerate(model.filtered_records):
             if record.get("id") == record_id:
@@ -2010,12 +2005,12 @@ class MainWindow(QMainWindow):
                     # Get existing fields to check for conflicts
                     existing_fields = store.list_fields()
                     existing_keys = {f["key"] for f in existing_fields}
-                    
+
                     for field in fields:
                         # Generate unique key if needed
                         from src.ui.add_field_dialog import _generate_unique_field_key
                         field_key = _generate_unique_field_key(field["key"], existing_fields)
-                        
+
                         # Only add if it doesn't already exist
                         if field_key not in existing_keys:
                             store.add_field(
@@ -2163,10 +2158,10 @@ class MainWindow(QMainWindow):
             # Also check model's search query (for virtualized mode)
             if not current_query and hasattr(model, '_search_query') and model._search_query:
                 current_query = model._search_query
-            
+
             # Refresh views
             model._refresh_data()
-            
+
             # Reapply the filter if one was active
             if current_query and current_query.strip():
                 # Set the pending query and perform search to reapply filter
@@ -2187,9 +2182,9 @@ class MainWindow(QMainWindow):
                     model.filtered_records = model.records.copy() if model.records else []
                 model.beginResetModel()
                 model.endResetModel()
-            
+
             self._update_navigation()
-            
+
             # Clear form view if record was deleted
             if self.form_view.current_record_id in record_ids:
                 self.form_view.current_record_id = None
@@ -2237,7 +2232,7 @@ class MainWindow(QMainWindow):
             # Select the new record
             for i, rec in enumerate(model.records):
                 if rec["id"] == new_id:
-                    index = model.index(i, 0)
+                    model.index(i, 0)
                     self.table_view.selectRow(i)
                     if self.content_stack.currentIndex() == 1:  # Form view
                         self.form_view.load_record(new_id)
@@ -2297,15 +2292,15 @@ class MainWindow(QMainWindow):
         if not self.current_store or not self.current_collection:
             QMessageBox.information(self, "Info", "Please select a collection first")
             return
-        
+
         from src.ui.add_field_dialog import AddFieldDialog
-        
+
         # Get existing fields to show in dialog
         existing_fields = self.current_store.list_fields()
         dialog = AddFieldDialog(self, existing_fields=existing_fields)
         if dialog.exec():
             field_data = dialog.get_field_data()
-            
+
             try:
                 # Add field to collection
                 self.current_store.add_field(
@@ -2316,38 +2311,38 @@ class MainWindow(QMainWindow):
                     indexed=True,  # Default to indexed for searchability
                     options=field_data.get("options")  # Include options for select/dropdown fields
                 )
-                
+
                 # Handle image association if provided
                 if field_data.get("image_path"):
                     # Store image association (this would need to be implemented in the store)
                     # For now, we'll just note it
                     pass
-                
+
                 # Refresh views
                 fields = self.current_store.list_fields()
                 self.table_view.set_collection(self.current_store, fields)
                 self.form_view.set_collection(self.current_store, fields)
-                
+
                 QMessageBox.information(self, "Success", f"Field '{field_data['label']}' added successfully")
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to add field: {str(e)}")
-    
+
     def _delete_field(self):
         """Delete a field from the current collection"""
         if not self.current_store or not self.current_collection:
             QMessageBox.information(self, "Info", "Please select a collection first")
             return
-        
-        from PySide6.QtWidgets import QInputDialog, QMessageBox
-        
+
+        from PySide6.QtWidgets import QInputDialog
+
         fields = self.current_store.list_fields()
         if not fields:
             QMessageBox.information(self, "Info", "No fields to delete")
             return
-        
+
         # Create list of field labels for selection
         field_labels = [f.get("alias", f.get("label", f["key"])) for f in fields]
-        
+
         field_label, ok = QInputDialog.getItem(
             self,
             "Delete Field",
@@ -2356,17 +2351,17 @@ class MainWindow(QMainWindow):
             0,
             False
         )
-        
+
         if not ok or not field_label:
             return
-        
+
         # Find the field
         field = next((f for f in fields if f.get("alias", f.get("label", f["key"])) == field_label), None)
         if not field:
             return
-        
+
         field_key = field["key"]
-        
+
         # Confirm deletion
         reply = QMessageBox.warning(
             self,
@@ -2381,32 +2376,32 @@ class MainWindow(QMainWindow):
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
-        
+
         if reply == QMessageBox.Yes:
             try:
                 # Actually delete the field from the collection
                 self.current_store.remove_field(field_key)
-                
+
                 # Refresh the collection view to reflect the change
                 if self.current_collection:
                     self._open_collection(self.current_collection)
-                
+
                 self.statusBar().showMessage(f"Field '{field_label}' deleted successfully", 3000)
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to delete field: {str(e)}")
-    
+
     def _export_all_collections(self):
         """Export all collections as a zip file"""
-        from PySide6.QtWidgets import QFileDialog, QMessageBox
-        from pathlib import Path
         import zipfile
         from datetime import datetime
-        
+
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
         collections = self.workspace.list_collections()
         if not collections:
             QMessageBox.information(self, "Info", "No collections to export")
             return
-        
+
         # Get save location
         default_filename = f"quartz_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
         file_path, _ = QFileDialog.getSaveFileName(
@@ -2415,10 +2410,10 @@ class MainWindow(QMainWindow):
             default_filename,
             "ZIP files (*.zip);;All files (*)"
         )
-        
+
         if not file_path:
             return
-        
+
         try:
             with zipfile.ZipFile(file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 # Add all collection databases
@@ -2429,12 +2424,12 @@ class MainWindow(QMainWindow):
                         if db_path.exists():
                             # Add database with collection name prefix
                             zipf.write(db_path, f"{collection_name}/{db_path.name}")
-                        
+
                         # Add collection icon if exists
                         icon_path = self.workspace.get_collection_icon_path(collection_name)
                         if icon_path and icon_path.exists():
                             zipf.write(icon_path, f"{collection_name}/icon.png")
-                        
+
                         # Add attachments if they exist
                         collection_dir = self.workspace.workspace_path / collection_name
                         attachments_dir = collection_dir / "attachments"
@@ -2443,7 +2438,7 @@ class MainWindow(QMainWindow):
                                 if att_file.is_file():
                                     arcname = f"{collection_name}/attachments/{att_file.relative_to(attachments_dir)}"
                                     zipf.write(att_file, arcname)
-            
+
             QMessageBox.information(
                 self,
                 "Success",
@@ -2454,61 +2449,62 @@ class MainWindow(QMainWindow):
 
     def _upload_data(self):
         """Upload CSV and create a new collection database"""
-        from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
-        from pathlib import Path
         import csv
-        
+        from pathlib import Path
+
+        from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
+
         # Get CSV or Excel file
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Upload CSV or Excel to Create Collection", "", 
+            self, "Upload CSV or Excel to Create Collection", "",
             "CSV files (*.csv);;Excel files (*.xlsx *.xls);;All files (*)"
         )
         if not file_path:
             return
-        
+
         # Get collection name
         collection_name, ok = QInputDialog.getText(
             self, "New Collection", "Enter collection name:"
         )
         if not ok or not collection_name.strip():
             return
-        
+
         collection_name = collection_name.strip()
-        
+
         # Check if collection already exists
         if collection_name in self.workspace.list_collections():
             QMessageBox.warning(
                 self, "Error", f"Collection '{collection_name}' already exists"
             )
             return
-        
+
         try:
             # Create new collection
             db_path = self.workspace.create_collection(collection_name)
             store = CollectionStore(db_path)
             store.connect()
-            
+
             # Read CSV or Excel file
             file_path_obj = Path(file_path)
             file_ext = file_path_obj.suffix.lower()
-            
+
             if file_ext in ('.xlsx', '.xls'):
                 # Read Excel file using openpyxl
                 try:
                     from openpyxl import load_workbook
                     wb = load_workbook(file_path, read_only=True, data_only=True)
                     ws = wb.active
-                    
+
                     # Get headers from first row
                     header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
                     csv_headers = [str(cell) if cell is not None else f"Column_{i+1}" for i, cell in enumerate(header_row)]
-                    
+
                     # Get all data rows
                     csv_data = []
                     for row in ws.iter_rows(min_row=2, values_only=True):
                         row_data = [str(cell) if cell is not None else "" for cell in row]
                         csv_data.append(row_data)
-                    
+
                     wb.close()
                 except ImportError:
                     QMessageBox.critical(self, "Error", "openpyxl is required for Excel files. Install it with: pip install openpyxl")
@@ -2521,17 +2517,17 @@ class MainWindow(QMainWindow):
                 from src.ui.import_dialog import detect_file_encoding
                 encoding = detect_file_encoding(file_path_obj)
                 try:
-                    with open(file_path, 'r', encoding=encoding) as f:
+                    with open(file_path, encoding=encoding) as f:
                         reader = csv.reader(f)
                         csv_headers = next(reader)
-                        csv_data = [row for row in reader]
+                        csv_data = list(reader)
                 except UnicodeDecodeError:
                     # If detected encoding fails, try with error handling
-                    with open(file_path, 'r', encoding=encoding, errors='replace') as f:
+                    with open(file_path, encoding=encoding, errors='replace') as f:
                         reader = csv.reader(f)
                         csv_headers = next(reader)
-                        csv_data = [row for row in reader]
-            
+                        csv_data = list(reader)
+
             # Create fields from CSV headers
             fields_created = []
             for header in csv_headers:
@@ -2540,7 +2536,7 @@ class MainWindow(QMainWindow):
                 field_key = "".join(c for c in field_key if c.isalnum() or c == "_")
                 if not field_key or field_key[0].isdigit():
                     field_key = f"field_{field_key}" if field_key else f"field_{len(fields_created)}"
-                
+
                 # Add field
                 store.add_field(
                     field_key=field_key,
@@ -2549,7 +2545,7 @@ class MainWindow(QMainWindow):
                     required=False
                 )
                 fields_created.append({"key": field_key, "label": header})
-            
+
             # Import data
             imported = 0
             for row_data in csv_data:
@@ -2558,19 +2554,19 @@ class MainWindow(QMainWindow):
                     if i < len(fields_created) and value:
                         field_key = fields_created[i]["key"]
                         record_data[field_key] = str(value)
-                
+
                 if record_data:
                     store.add_record(record_data)
                     imported += 1
-            
+
             store.close()
-            
+
             # Refresh collections list
             self._load_collections()
-            
+
             # Open the new collection
             self._open_collection(collection_name)
-            
+
             QMessageBox.information(
                 self, "Success",
                 f"Collection '{collection_name}' created with {imported} records from CSV."
@@ -2584,7 +2580,7 @@ class MainWindow(QMainWindow):
     def _toggle_form_lock(self, checked: bool):
         """Toggle form lock state (readonly/editable)"""
         self.form_locked = checked
-        
+
         # Update icon (only if not in compact view)
         if not self.config.get("compact_view", False):
             if checked:
@@ -2593,22 +2589,22 @@ class MainWindow(QMainWindow):
             else:
                 self.lock_form_action.setIcon(QIcon(str(asset_path("unlock.png"))))
                 self.lock_form_action.setToolTip("Lock Form (Make Readonly)")
-        
+
         # Update form view readonly state
         self.form_view.set_readonly(checked)
-        
+
         # Update table view readonly state
         self.table_view.set_readonly(checked)
-    
+
     def _toggle_compact_view(self, checked: bool):
         """Toggle compact view mode"""
         self.config.set("compact_view", checked)
         self._update_compact_view()
-    
+
     def _update_compact_view(self):
         """Update toolbar icons based on compact view setting - hide buttons completely"""
         compact = self.config.get("compact_view", False)
-        
+
         # Get the toolbar
         toolbar = getattr(self, 'main_toolbar', None)
         if not toolbar:
@@ -2618,10 +2614,10 @@ class MainWindow(QMainWindow):
                     toolbar = widget
                     self.main_toolbar = toolbar  # Store it
                     break
-        
+
         if not toolbar:
             return
-        
+
         # Get list of actions to hide
         actions_to_hide = []
         if hasattr(self, 'new_record_action'):
@@ -2640,11 +2636,11 @@ class MainWindow(QMainWindow):
             actions_to_hide.append(self.join_action)
         if hasattr(self, 'lock_form_action'):
             actions_to_hide.append(self.lock_form_action)
-        
+
         # Hide/show actions directly - QAction has setVisible method
         for action in actions_to_hide:
             action.setVisible(not compact)
-        
+
         # Also hide/show the widgets for visual consistency
         from PySide6.QtWidgets import QToolButton
         for action in actions_to_hide:
@@ -2657,7 +2653,7 @@ class MainWindow(QMainWindow):
                     if button.defaultAction() == action:
                         button.setVisible(not compact)
                         break
-        
+
         # Restore icons when not in compact view
         if not compact:
             if hasattr(self, 'new_record_action'):
@@ -2674,7 +2670,7 @@ class MainWindow(QMainWindow):
                     self.lock_form_action.setIcon(QIcon(str(asset_path("lock.png"))))
                 else:
                     self.lock_form_action.setIcon(QIcon(str(asset_path("unlock.png"))))
-        
+
         # Hide separators that are adjacent to hidden buttons
         # Get list of actions to hide for separator logic
         actions_to_hide = []
@@ -2694,22 +2690,22 @@ class MainWindow(QMainWindow):
             actions_to_hide.append(self.join_action)
         if hasattr(self, 'lock_form_action'):
             actions_to_hide.append(self.lock_form_action)
-        
+
         all_actions = toolbar.actions()
         for i, action in enumerate(all_actions):
             if action.isSeparator():
                 # Check if adjacent actions are hidden
                 prev_hidden = False
                 next_hidden = False
-                
+
                 if i > 0:
                     prev_action = all_actions[i - 1]
                     prev_hidden = prev_action in actions_to_hide and compact
-                
+
                 if i < len(all_actions) - 1:
                     next_action = all_actions[i + 1]
                     next_hidden = next_action in actions_to_hide and compact
-                
+
                 # Hide separator if adjacent to hidden actions
                 if compact and (prev_hidden or next_hidden):
                     widget = toolbar.widgetForAction(action)
@@ -2720,18 +2716,18 @@ class MainWindow(QMainWindow):
                     widget = toolbar.widgetForAction(action)
                     if widget:
                         widget.setVisible(True)
-    
+
     def _toggle_collection_panel(self, checked: bool):
         """Toggle collection panel visibility"""
         self.config.set("visible_collection_panel", checked)
         self._apply_view_settings()
-    
+
     def _toggle_show_key(self, checked: bool):
         """Toggle primary key column visibility"""
         self.config.set("show_key_column", checked)
         if hasattr(self, 'table_view') and self.table_view:
             self.table_view.setColumnHidden(0, not checked)
-    
+
     def _toggle_expanded_view(self, checked: bool):
         """Toggle expanded view mode"""
         self.config.set("expanded_view", checked)
@@ -2741,50 +2737,50 @@ class MainWindow(QMainWindow):
         if self.current_store:
             fields = self.current_store.list_fields()
             self.table_view.set_collection(self.current_store, fields)
-    
+
     def _check_toolbar_overflow(self):
         """Check if toolbar has overflow and update overflow menu"""
         if not hasattr(self, 'overflow_button') or not hasattr(self, 'main_toolbar'):
             return
-        
+
         toolbar = self.main_toolbar
         if not toolbar or not toolbar.isVisible():
             return
-        
+
         # Wait for layout to update
         from PySide6.QtCore import QTimer
         QTimer.singleShot(10, lambda: self._do_check_overflow())
-    
+
     def _do_check_overflow(self):
         """Actually perform overflow check after layout update"""
         if not hasattr(self, 'overflow_button') or not hasattr(self, 'main_toolbar'):
             return
-        
+
         toolbar = self.main_toolbar
         if not toolbar:
             return
-        
+
         # Get toolbar's visible width
         toolbar_width = toolbar.width()
         if toolbar_width == 0:
             return
-        
+
         # Get all actions (excluding separators and overflow button)
         all_actions = toolbar.actions()
         hidden_actions = []
-        
+
         # Find the overflow button widget to exclude it
         overflow_widget = None
         if hasattr(self, 'overflow_button'):
             overflow_widget = self.overflow_button
-        
+
         # Check each action's widget position
         from PySide6.QtWidgets import QToolButton
-        
+
         for action in all_actions:
             if action.isSeparator():
                 continue
-            
+
             widget = toolbar.widgetForAction(action)
             if not widget:
                 # Try to find button widget
@@ -2792,12 +2788,12 @@ class MainWindow(QMainWindow):
                     if btn.defaultAction() == action:
                         widget = btn
                         break
-            
+
             if widget and widget != overflow_widget:
                 # Reserve space for overflow button (40px to be safe)
                 overflow_button_width = 40
                 visible_threshold = toolbar_width - overflow_button_width
-                
+
                 # Check if widget is actually visible and if it extends beyond threshold
                 # A widget is hidden if its right edge is beyond the visible threshold
                 # OR if it's not visible at all (Qt might have hidden it)
@@ -2812,10 +2808,10 @@ class MainWindow(QMainWindow):
                         # Widget extends beyond visible area
                         if action.text() or action.toolTip():
                             hidden_actions.append(action)
-        
+
         # Update overflow menu
         self.overflow_menu.clear()
-        
+
         if hidden_actions:
             # Add hidden actions to overflow menu
             for action in hidden_actions:
@@ -2830,37 +2826,30 @@ class MainWindow(QMainWindow):
         else:
             # Hide overflow button
             self.overflow_button.setVisible(False)
-    
-    def resizeEvent(self, event):
-        """Handle window resize"""
-        super().resizeEvent(event)
-        # Check toolbar overflow after resize
-        from PySide6.QtCore import QTimer
-        QTimer.singleShot(50, self._check_toolbar_overflow)
-    
+
     def _apply_view_settings(self):
         """Apply view settings from config"""
         # Apply collection panel visibility
         visible = self.config.get("visible_collection_panel", True)
         if hasattr(self, 'sidebar_widget'):
             self.sidebar_widget.setVisible(visible)
-        
+
         # Apply key column visibility
         show_key = self.config.get("show_key_column", True)
         if hasattr(self, 'table_view') and self.table_view:
             self.table_view.setColumnHidden(0, not show_key)
         if hasattr(self, 'show_key_action'):
             self.show_key_action.setChecked(show_key)
-        
+
         # Update compact view
         if hasattr(self, 'compact_view_action'):
             self.compact_view_action.setChecked(self.config.get("compact_view", False))
         self._update_compact_view()
-        
+
         # Update expanded view
         if hasattr(self, 'expanded_view_action'):
             self.expanded_view_action.setChecked(self.config.get("expanded_view", False))
-        
+
         # Apply table view settings
         self._apply_table_view_settings()
 
@@ -2868,10 +2857,10 @@ class MainWindow(QMainWindow):
         """Apply table view settings from config"""
         if not hasattr(self, 'table_view') or not self.table_view:
             return
-        
+
         # Check if expanded view is enabled
         expanded_view = self.config.get("expanded_view", False)
-        
+
         if expanded_view:
             # Expanded view: maximize everything to show all data
             self.table_view.setWordWrap(True)  # Enable word wrap for text fields
@@ -2900,7 +2889,7 @@ class MainWindow(QMainWindow):
             # Apply to all existing rows
             for row in range(self.table_view.model.rowCount()):
                 self.table_view.setRowHeight(row, row_height)
-            
+
             # Apply default column width (for new columns)
             col_width = self.config.get("column_width_default", 120)
             # Set default width for horizontal header
@@ -2916,17 +2905,16 @@ class MainWindow(QMainWindow):
                     continue
                 if current_width < col_width:
                     self.table_view.setColumnWidth(col, col_width)
-        
+
         # Apply font size (always applies)
-        from PySide6.QtGui import QFont
         font_size = self.config.get("font_size", 10)
         font = self.table_view.font()
         font.setPointSize(font_size)
         self.table_view.setFont(font)
-        
+
         # Ensure vertical header width is maintained (row numbers visibility)
         self.table_view.verticalHeader().setFixedWidth(70)  # Ensure row numbers are visible
-        
+
         # Also apply to form view
         if hasattr(self, 'form_view') and self.form_view:
             form_font = self.form_view.font()
@@ -3003,13 +2991,13 @@ class MainWindow(QMainWindow):
         thread.error.connect(lambda _: None)
         thread.finished.connect(lambda: self._cleanup_thread(thread))
         thread.start()
-    
+
     def _cleanup_thread(self, thread):
         """Clean up a finished update check thread"""
         if thread in self.update_check_threads:
             self.update_check_threads.remove(thread)
         thread.deleteLater()
-    
+
     def _show_update_dialog(self, update_info: dict):
         """Show update dialog and handle user response"""
         dialog = UpdateDialog(update_info, self)
@@ -3029,13 +3017,13 @@ class MainWindow(QMainWindow):
             if update_info['version'] not in ignored_versions:
                 ignored_versions.append(update_info['version'])
                 self.config.set("update_ignored_versions", ignored_versions)
-    
+
     def _open_download_url(self, update_info: dict):
         """Open the download URL in the default browser (fallback method)"""
         import webbrowser
         download_url = update_info.get('download_url')
         release_url = update_info.get('url')
-        
+
         # Prefer direct download URL, fallback to release page
         url = download_url if download_url else release_url
         if url:
@@ -3073,88 +3061,95 @@ class MainWindow(QMainWindow):
         """Refresh everything - deselect collections and reload"""
         # Deselect current collection
         self._deselect_collection()
-        
+
         # Reload collections list
         self._load_collections()
-        
+
         # Clear any search/filter state
         if hasattr(self, 'search_box'):
             self.search_box.clear()
-        
+
         # Clear collection filters and sorting
         if hasattr(self, 'collection_filters'):
             self.collection_filters.clear()
         if hasattr(self, 'collection_sorting'):
             self.collection_sorting.clear()
-        
+
         # Update status
         self.statusBar().showMessage("Refreshed - all collections reloaded", 3000)
-    
+
     def _confirm_destructive_action(self, title: str, message: str) -> bool:
         """Show confirmation dialog requiring user to type 'delete'"""
-        from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QHBoxLayout
-        
+        from PySide6.QtWidgets import (
+            QDialog,
+            QHBoxLayout,
+            QLabel,
+            QLineEdit,
+            QPushButton,
+            QVBoxLayout,
+        )
+
         dialog = QDialog(self)
         dialog.setWindowTitle(title)
         dialog.setMinimumWidth(400)
-        
+
         layout = QVBoxLayout(dialog)
-        
+
         # Warning message
         warning_label = QLabel(message)
         warning_label.setWordWrap(True)
         layout.addWidget(warning_label)
-        
+
         # Instruction
         instruction_label = QLabel("Type 'delete' to confirm:")
         layout.addWidget(instruction_label)
-        
+
         # Input field
         confirm_input = QLineEdit()
         confirm_input.setPlaceholderText("Type 'delete' here...")
         layout.addWidget(confirm_input)
-        
+
         # Buttons
         button_layout = QHBoxLayout()
         button_layout.addStretch()
-        
+
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setProperty("class", "secondary")
         cancel_btn.clicked.connect(dialog.reject)
-        
+
         confirm_btn = QPushButton("Confirm")
         confirm_btn.setDefault(True)
         confirm_btn.setEnabled(False)  # Disabled until 'delete' is typed
-        
+
         # Enable confirm button only when 'delete' is typed
         def on_text_changed(text):
             confirm_btn.setEnabled(text.strip().lower() == "delete")
-        
+
         confirm_input.textChanged.connect(on_text_changed)
         confirm_btn.clicked.connect(dialog.accept)
-        
+
         button_layout.addWidget(cancel_btn)
         button_layout.addWidget(confirm_btn)
         layout.addLayout(button_layout)
-        
+
         # Apply theme
         if hasattr(self, 'styleSheet'):
             dialog.setStyleSheet(self.styleSheet())
-        
+
         return dialog.exec() == QDialog.Accepted
-    
+
     def _delete_all_records(self):
         """Delete all records from the current collection"""
         if not self.current_store or not self.current_collection:
             QMessageBox.information(self, "Info", "Please select a collection first")
             return
-        
+
         # Get record count
         record_count = self.current_store.count_records()
         if record_count == 0:
             QMessageBox.information(self, "Info", "No records to delete")
             return
-        
+
         # Confirm with typing 'delete'
         confirmed = self._confirm_destructive_action(
             "Delete All Records",
@@ -3162,45 +3157,45 @@ class MainWindow(QMainWindow):
             f"This action cannot be undone.\n\n"
             f"Are you sure you want to proceed?"
         )
-        
+
         if not confirmed:
             return
-        
+
         try:
             # Delete all records using SQL
             self.current_store.connect()
             cursor = self.current_store.conn.cursor()
             cursor.execute("DELETE FROM records")
-            
+
             # Update FTS index
             self.current_store.update_fts_index()
-            
+
             self.current_store.conn.commit()
-            
+
             # Refresh views
             if hasattr(self, 'table_view') and self.table_view:
                 self.table_view.model._refresh_data()
             if hasattr(self, 'form_view') and self.form_view:
                 self.form_view.new_record()
             self._update_navigation()
-            
+
             QMessageBox.information(
                 self, "Success",
                 f"Deleted all {record_count} record(s) from '{self.current_collection}'."
             )
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to delete all records:\n{str(e)}")
-    
+
     def _delete_all_collections(self):
         """Delete all collections"""
         # Get collection count
         collections = self.workspace.list_collections()
         collection_count = len(collections)
-        
+
         if collection_count == 0:
             QMessageBox.information(self, "Info", "No collections to delete")
             return
-        
+
         # Confirm with typing 'delete'
         confirmed = self._confirm_destructive_action(
             "Delete All Collections",
@@ -3209,10 +3204,10 @@ class MainWindow(QMainWindow):
             f"All data, fields, and records will be lost.\n\n"
             f"Are you sure you want to proceed?"
         )
-        
+
         if not confirmed:
             return
-        
+
         # Confirm again with a simple yes/no
         reply = QMessageBox.question(
             self,
@@ -3223,20 +3218,20 @@ class MainWindow(QMainWindow):
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
-        
+
         if reply != QMessageBox.Yes:
             return
-        
+
         try:
             deleted_count = 0
             errors = []
-            
+
             # Close current collection if open
             if self.current_store:
                 self.current_store.close()
                 self.current_store = None
                 self.current_collection = None
-            
+
             # Delete each collection
             for collection_name in list(collections):
                 try:
@@ -3245,11 +3240,11 @@ class MainWindow(QMainWindow):
                     deleted_count += 1
                 except Exception as e:
                     errors.append(f"{collection_name}: {str(e)}")
-            
+
             # Refresh UI
             self._load_collections()
             self._deselect_collection()
-            
+
             # Show results
             if errors:
                 QMessageBox.warning(
@@ -3264,27 +3259,27 @@ class MainWindow(QMainWindow):
                 )
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to delete all collections:\n{str(e)}")
-    
+
     def _undo(self):
         """Undo the last action"""
         if not self.undo_history:
             return
-        
+
         # Get the last command
         command = self.undo_history.pop()
-        
+
         try:
             # Execute undo
             command.undo()
-            
+
             # Move to redo history
             self.redo_history.append(command)
             if len(self.redo_history) > self.max_history:
                 self.redo_history.pop(0)
-            
+
             # Update button states
             self._update_undo_redo_buttons()
-            
+
             # Refresh views
             if self.current_store:
                 if hasattr(self, 'table_view') and self.table_view:
@@ -3297,27 +3292,27 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Error", f"Failed to undo: {str(e)}")
             # Put command back if undo failed
             self.undo_history.append(command)
-    
+
     def _redo(self):
         """Redo the last undone action"""
         if not self.redo_history:
             return
-        
+
         # Get the last undone command
         command = self.redo_history.pop()
-        
+
         try:
             # Execute redo
             command.redo()
-            
+
             # Move back to undo history
             self.undo_history.append(command)
             if len(self.undo_history) > self.max_history:
                 self.undo_history.pop(0)
-            
+
             # Update button states
             self._update_undo_redo_buttons()
-            
+
             # Refresh views
             if self.current_store:
                 if hasattr(self, 'table_view') and self.table_view:
@@ -3330,14 +3325,14 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Error", f"Failed to redo: {str(e)}")
             # Put command back if redo failed
             self.redo_history.append(command)
-    
+
     def _update_undo_redo_buttons(self):
         """Update undo/redo button enabled states"""
         if hasattr(self, 'undo_action'):
             self.undo_action.setEnabled(len(self.undo_history) > 0)
         if hasattr(self, 'redo_action'):
             self.redo_action.setEnabled(len(self.redo_history) > 0)
-    
+
     def _add_to_history(self, command):
         """Add a command to undo history"""
         self.undo_history.append(command)
@@ -3381,7 +3376,7 @@ class MainWindow(QMainWindow):
                 # Select previous row
                 model = self.table_view.model
                 if current_row - 1 < len(model.filtered_records):
-                    index = model.index(current_row - 1, 0)
+                    model.index(current_row - 1, 0)
                     self.table_view.selectRow(current_row - 1)
                     # If in form view, load the record
                     if self.content_stack.currentIndex() == 1:  # Form view
@@ -3430,7 +3425,7 @@ class MainWindow(QMainWindow):
             self.table_view.viewport().update()
         # Update navigation counter
         self._update_navigation()
-        
+
         # If in table view, select the newly saved record
         if self.table_toggle.isChecked():
             model = self.table_view.model
@@ -3441,12 +3436,11 @@ class MainWindow(QMainWindow):
                         # Scroll to the selected row
                         self.table_view.scrollTo(model.index(i, 0))
                         break
-    
+
     def eventFilter(self, obj, event):
         """Event filter to detect clicks on empty space in top bar and collections list"""
-        from PySide6.QtCore import QEvent
         from PySide6.QtGui import QMouseEvent
-        
+
         # Handle mouse press on top bar widget (check if it exists first)
         if hasattr(self, 'top_bar_widget') and obj == self.top_bar_widget and event.type() == QEvent.MouseButtonPress:
             if isinstance(event, QMouseEvent) and event.button() == Qt.LeftButton:
@@ -3459,7 +3453,7 @@ class MainWindow(QMainWindow):
                     if hasattr(self, 'collections_list'):
                         self.collections_list.clearSelection()
                     return True
-        
+
         # Handle mouse press on collections list (for clicks on empty space and right-clicks)
         if hasattr(self, 'collections_list') and obj == self.collections_list and event.type() == QEvent.MouseButtonPress:
             if isinstance(event, QMouseEvent) and event.button() == Qt.RightButton:
@@ -3469,16 +3463,16 @@ class MainWindow(QMainWindow):
                     self._right_click_selected_row = self.collections_list.currentRow()
                 else:
                     self._right_click_selected_row = -1
-                
+
                 # Block signals IMMEDIATELY to prevent selection change
                 self.collections_list.blockSignals(True)
                 self._right_click_in_progress = True
-                
+
                 # Restore selection multiple times to ensure it sticks
                 # First restore immediately (before Qt processes)
                 if self._right_click_selected_row >= 0 and self._right_click_selected_row < self.collections_list.count():
                     self.collections_list.setCurrentRow(self._right_click_selected_row)
-                
+
                 # Then restore again after Qt processes the event
                 from PySide6.QtCore import QTimer
                 def restore_selection():
@@ -3487,7 +3481,7 @@ class MainWindow(QMainWindow):
                             self.collections_list.setCurrentRow(self._right_click_selected_row)
                     self.collections_list.blockSignals(False)
                     self._right_click_in_progress = False
-                
+
                 # Use multiple timers to ensure restoration happens
                 QTimer.singleShot(0, restore_selection)
                 QTimer.singleShot(10, restore_selection)  # Backup restoration
@@ -3499,9 +3493,9 @@ class MainWindow(QMainWindow):
                     self.collections_list.clearSelection()
                     # This will trigger itemSelectionChanged which calls _deselect_collection
                     return True
-        
+
         return super().eventFilter(obj, event)
-    
+
     def resizeEvent(self, event):
         """Handle window resize - check toolbar overflow"""
         super().resizeEvent(event)
@@ -3515,7 +3509,7 @@ class MainWindow(QMainWindow):
         # Check overflow after window is shown
         from PySide6.QtCore import QTimer
         QTimer.singleShot(300, self._check_toolbar_overflow)
-    
+
     def closeEvent(self, event):
         """Handle window close"""
         # Wait for any running update check threads to finish
@@ -3525,7 +3519,7 @@ class MainWindow(QMainWindow):
             if thread in self.update_check_threads:
                 self.update_check_threads.remove(thread)
             thread.deleteLater()
-        
+
         if self.current_store:
             self.current_store.close()
         event.accept()

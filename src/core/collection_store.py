@@ -1,21 +1,22 @@
 """Collection database store and schema management"""
 
-import sqlite3
-from pathlib import Path
-from typing import List, Dict, Optional, Any, Union
-from datetime import datetime
 import json
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
 import pandas as pd
 
 
 class CollectionStore:
     """Manages a single collection's SQLite database"""
-    
+
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
-        self.conn: Optional[sqlite3.Connection] = None
-        self.key_prefix: Optional[str] = None  # Prefix for record IDs (e.g., "REST" -> "REST_1")
-    
+        self.conn: sqlite3.Connection | None = None
+        self.key_prefix: str | None = None  # Prefix for record IDs (e.g., "REST" -> "REST_1")
+
     def connect(self):
         """Open database connection"""
         if self.conn is None:
@@ -29,7 +30,7 @@ class CollectionStore:
             self.conn.execute("PRAGMA cache_size = -64000")  # 64MB cache (negative = KB)
             self.conn.execute("PRAGMA temp_store = MEMORY")  # Store temp tables in memory
             self.conn.execute("PRAGMA mmap_size = 268435456")  # 256MB memory-mapped I/O
-    
+
     def close(self):
         """Close database connection"""
         if self.conn:
@@ -46,20 +47,20 @@ class CollectionStore:
                 # Close the connection
                 self.conn.close()
                 self.conn = None
-    
+
     def __enter__(self):
         self.connect()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
-    
-    def initialize_schema(self, key_prefix: Optional[str] = None):
+
+    def initialize_schema(self, key_prefix: str | None = None):
         """Initialize database schema"""
         self.connect()
         self.key_prefix = key_prefix
         cursor = self.conn.cursor()
-        
+
         # Fields table (field definitions)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS fields (
@@ -82,7 +83,7 @@ class CollectionStore:
             cursor.execute("ALTER TABLE fields ADD COLUMN field_order INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass  # Column already exists
-        
+
         # Layout nodes (form designer layout)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS layout_nodes (
@@ -99,7 +100,7 @@ class CollectionStore:
                 FOREIGN KEY (field_key) REFERENCES fields(field_key)
             )
         """)
-        
+
         # Records table - use TEXT ID if prefix is provided, otherwise INTEGER
         if key_prefix:
             # Use TEXT ID with prefix
@@ -146,7 +147,7 @@ class CollectionStore:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_records_updated_at ON records(updated_at)
             """)
-        
+
         # Dependencies registry
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS deps (
@@ -159,7 +160,7 @@ class CollectionStore:
                 created_at TEXT NOT NULL
             )
         """)
-        
+
         # Relationships table (for cross-collection relationships)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS relationships (
@@ -176,31 +177,31 @@ class CollectionStore:
                 UNIQUE(source_collection, source_field_key, target_collection, target_field_key)
             )
         """)
-        
+
         # FTS5 search index (will be created when fields are indexed)
         # This is handled dynamically
-        
+
         self.conn.commit()
-    
+
     def add_field(self, field_key: str, field_type: str, label: str,
-                  required: bool = False, default_value: Optional[str] = None,
-                  validation_rules: Optional[Dict] = None,
-                  options: Optional[List] = None, indexed: bool = False):
+                  required: bool = False, default_value: str | None = None,
+                  validation_rules: dict | None = None,
+                  options: list | None = None, indexed: bool = False):
         """Add a new field to the schema"""
         self.connect()
         cursor = self.conn.cursor()
         now = datetime.now().isoformat()
-        
+
         # Get the next order value (highest order + 1)
         cursor.execute("SELECT MAX(field_order) FROM fields")
         max_order = cursor.fetchone()[0]
         next_order = (max_order or 0) + 1
-        
+
         # Check if field_order column exists
         cursor.execute("PRAGMA table_info(fields)")
         columns = [col[1] for col in cursor.fetchall()]
         has_order = 'field_order' in columns
-        
+
         if has_order:
             cursor.execute("""
                 INSERT INTO fields (field_key, field_type, label, required, default_value,
@@ -227,22 +228,22 @@ class CollectionStore:
                 1 if indexed else 0,
                 now, now
             ))
-        
+
         # Add column to records table
         cursor.execute(f"ALTER TABLE records ADD COLUMN {field_key} TEXT")
-        
+
         # If indexed, add to FTS5 index
         if indexed:
             self.update_fts_index()
-        
+
         self.conn.commit()
-    
+
     def set_field_order(self, field_key: str, new_order: int):
         """Update the display order of a field"""
         self._ensure_schema()
         self.connect()
         cursor = self.conn.cursor()
-        
+
         # Check if field_order column exists
         cursor.execute("PRAGMA table_info(fields)")
         columns = [col[1] for col in cursor.fetchall()]
@@ -253,19 +254,19 @@ class CollectionStore:
                 self.conn.commit()
             except sqlite3.OperationalError:
                 pass  # Column already exists
-        
+
         cursor.execute("""
             UPDATE fields SET field_order = ?, updated_at = ?
             WHERE field_key = ?
         """, (new_order, datetime.now().isoformat(), field_key))
         self.conn.commit()
-    
-    def reorder_fields(self, field_keys: List[str]):
+
+    def reorder_fields(self, field_keys: list[str]):
         """Reorder fields by providing a list of field keys in the desired order"""
         self._ensure_schema()
         self.connect()
         cursor = self.conn.cursor()
-        
+
         # Check if field_order column exists
         cursor.execute("PRAGMA table_info(fields)")
         columns = [col[1] for col in cursor.fetchall()]
@@ -276,7 +277,7 @@ class CollectionStore:
                 self.conn.commit()
             except sqlite3.OperationalError:
                 pass  # Column already exists
-        
+
         now = datetime.now().isoformat()
         for order, field_key in enumerate(field_keys, start=1):
             cursor.execute("""
@@ -284,22 +285,22 @@ class CollectionStore:
                 WHERE field_key = ?
             """, (order, now, field_key))
         self.conn.commit()
-    
+
     def remove_field(self, field_key: str):
         """Remove a field from the collection schema and drop the column from records table"""
         self.connect()
         cursor = self.conn.cursor()
-        
+
         # Check if this field was indexed (before deleting)
         cursor.execute("SELECT indexed FROM fields WHERE field_key = ?", (field_key,))
         field_row = cursor.fetchone()
         was_indexed = field_row and field_row[0] == 1
-        
+
         # Check if the column exists in the records table before trying to drop it
         cursor.execute("PRAGMA table_info(records)")
         table_columns = [col[1] for col in cursor.fetchall()]
         column_exists = field_key in table_columns
-        
+
         # Try to drop the column from records table if it exists
         # SQLite 3.35.0+ supports DROP COLUMN, older versions need table recreation
         if column_exists:
@@ -312,7 +313,7 @@ class CollectionStore:
                 # Get the current table structure
                 cursor.execute("PRAGMA table_info(records)")
                 table_info = cursor.fetchall()
-                
+
                 # Determine ID column type
                 id_type = "INTEGER"
                 id_autoincrement = False
@@ -323,18 +324,18 @@ class CollectionStore:
                         if col[5] == 1 and id_type == "INTEGER":
                             id_autoincrement = True
                         break
-                
+
                 # Build list of columns to keep (excluding the field being removed)
                 columns_to_keep = []
                 column_defs = []
-                
+
                 for col in table_info:
                     col_name = col[1]
                     if col_name == field_key:
                         continue  # Skip the column we're removing
-                    
+
                     columns_to_keep.append(col_name)
-                    
+
                     # Build column definition
                     if col_name == 'id':
                         if id_type == "INTEGER" and id_autoincrement:
@@ -350,55 +351,55 @@ class CollectionStore:
                     else:
                         # Dynamic field columns are all TEXT
                         column_defs.append(f"{col_name} TEXT")
-                
+
                 # Create new table without the dropped column
                 create_sql = f"CREATE TABLE records_new ({', '.join(column_defs)})"
                 cursor.execute(create_sql)
-                
+
                 # Copy data (excluding the dropped column)
                 select_cols = ", ".join(columns_to_keep)
                 cursor.execute(f"INSERT INTO records_new SELECT {select_cols} FROM records")
-                
+
                 # Drop old table and rename new one
                 cursor.execute("DROP TABLE records")
                 cursor.execute("ALTER TABLE records_new RENAME TO records")
-                
+
                 # Recreate indexes
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_records_created_at ON records(created_at)")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_records_updated_at ON records(updated_at)")
-                
+
                 self.conn.commit()
-        
+
         # Remove from fields table
         cursor.execute("DELETE FROM fields WHERE field_key = ?", (field_key,))
-        
+
         # Remove any layout nodes referencing this field
         cursor.execute("DELETE FROM layout_nodes WHERE field_key = ?", (field_key,))
-        
+
         # Remove any dependencies referencing this field
         cursor.execute("DELETE FROM deps WHERE source_id = ? OR target_id = ?", (field_key, field_key))
-        
+
         # Update FTS index if needed (will rebuild without this field)
         if was_indexed:
             self.update_fts_index()
-        
+
         self.conn.commit()
-    
+
     def update_fts_index(self):
         """Create or update FTS5 search index"""
         self.connect()
         cursor = self.conn.cursor()
-        
+
         # Get all indexed fields
         cursor.execute("SELECT field_key FROM fields WHERE indexed = 1")
         indexed_fields = [row[0] for row in cursor.fetchall()]
-        
+
         if not indexed_fields:
             return
-        
+
         # Drop existing FTS table if it exists
         cursor.execute("DROP TABLE IF EXISTS records_fts")
-        
+
         # Create FTS5 table with indexed fields
         fts_columns = ", ".join(indexed_fields)
         cursor.execute(f"""
@@ -408,7 +409,7 @@ class CollectionStore:
                 content_rowid='id'
             )
         """)
-        
+
         # Populate FTS index
         if indexed_fields:
             select_cols = ", ".join(indexed_fields)
@@ -416,23 +417,23 @@ class CollectionStore:
                 INSERT INTO records_fts (rowid, {select_cols})
                 SELECT id, {select_cols} FROM records
             """)
-        
+
         self.conn.commit()
-    
+
     def _ensure_schema(self):
         """Ensure database schema is initialized"""
         self.connect()
         cursor = self.conn.cursor()
         # Check if fields table exists
         cursor.execute("""
-            SELECT name FROM sqlite_master 
+            SELECT name FROM sqlite_master
             WHERE type='table' AND name='fields'
         """)
         if not cursor.fetchone():
             # Schema not initialized, initialize it now
             self.initialize_schema(self.key_prefix)
-    
-    def list_fields(self) -> List[Dict]:
+
+    def list_fields(self) -> list[dict]:
         """List all fields"""
         self._ensure_schema()
         self.connect()
@@ -441,7 +442,7 @@ class CollectionStore:
         cursor.execute("PRAGMA table_info(fields)")
         columns = [col[1] for col in cursor.fetchall()]
         has_order = 'field_order' in columns
-        
+
         if has_order:
             cursor.execute("""
                 SELECT field_key, field_type, label, required, default_value,
@@ -456,7 +457,7 @@ class CollectionStore:
                 FROM fields
                 ORDER BY created_at
             """)
-        
+
         fields = []
         for row in cursor.fetchall():
             if has_order:
@@ -484,24 +485,24 @@ class CollectionStore:
                     "order": 0
                 }
             fields.append(field)
-        
+
         return fields
-    
-    def get_field(self, field_key: str) -> Optional[Dict]:
+
+    def get_field(self, field_key: str) -> dict | None:
         """Get a single field definition"""
         fields = self.list_fields()
         return next((f for f in fields if f["key"] == field_key), None)
-    
-    def add_record(self, data: Dict[str, Any]) -> Union[int, str]:
+
+    def add_record(self, data: dict[str, Any]) -> int | str:
         """Add a new record - returns ID (int or str depending on prefix)"""
         self._ensure_schema()
         self.connect()
         cursor = self.conn.cursor()
         now = datetime.now().isoformat()
-        
+
         import uuid
         record_uuid = str(uuid.uuid4())
-        
+
         # Generate record ID based on prefix
         if self.key_prefix:
             # Use prefix-based ID: "PREFIX_1", "PREFIX_2", etc.
@@ -515,7 +516,7 @@ class CollectionStore:
             result = cursor.fetchone()
             counter = result[0] if result else 1
             record_id = f"{self.key_prefix}_{counter}"
-            
+
             # Build column list and values (include id)
             columns = ["id", "record_uuid", "created_at", "updated_at"]
             placeholders = ["?", "?", "?", "?"]
@@ -525,7 +526,7 @@ class CollectionStore:
             columns = ["record_uuid", "created_at", "updated_at"]
             placeholders = ["?", "?", "?"]
             values = [record_uuid, now, now]
-        
+
         for key, value in data.items():
             columns.append(key)
             placeholders.append("?")
@@ -536,33 +537,33 @@ class CollectionStore:
                 values.append(json.dumps(value))
             else:
                 values.append(str(value))
-        
+
         sql = f"""
             INSERT INTO records ({', '.join(columns)})
             VALUES ({', '.join(placeholders)})
         """
         cursor.execute(sql, values)
-        
+
         # Get the ID (for INTEGER, use lastrowid; for TEXT, we already have it)
         if not self.key_prefix:
             record_id = cursor.lastrowid
-        
+
         # Update FTS index if needed
         self.update_fts_index()
-        
+
         self.conn.commit()
         return record_id
-    
-    def update_record(self, record_id: int, data: Dict[str, Any]):
+
+    def update_record(self, record_id: int, data: dict[str, Any]):
         """Update an existing record"""
         self._ensure_schema()
         self.connect()
         cursor = self.conn.cursor()
         now = datetime.now().isoformat()
-        
+
         updates = ["updated_at = ?"]
         values = [now]
-        
+
         for key, value in data.items():
             updates.append(f"{key} = ?")
             if value is None:
@@ -571,29 +572,29 @@ class CollectionStore:
                 values.append(json.dumps(value))
             else:
                 values.append(str(value))
-        
+
         values.append(record_id)
         sql = f"UPDATE records SET {', '.join(updates)} WHERE id = ?"
         cursor.execute(sql, values)
-        
+
         # Update FTS index
         self.update_fts_index()
-        
+
         self.conn.commit()
-    
-    def delete_record(self, record_id: Union[int, str]):
+
+    def delete_record(self, record_id: int | str):
         """Delete a record"""
         self._ensure_schema()
         self.connect()
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM records WHERE id = ?", (record_id,))
-        
+
         # Update FTS index
         self.update_fts_index()
-        
+
         self.conn.commit()
-    
-    def get_record(self, record_id: Union[int, str]) -> Optional[Dict]:
+
+    def get_record(self, record_id: int | str) -> dict | None:
         """Get a single record"""
         self._ensure_schema()
         self.connect()
@@ -603,23 +604,23 @@ class CollectionStore:
         if row:
             return dict(row)
         return None
-    
-    def list_records(self, limit: Optional[int] = None, offset: int = 0, order_by: Optional[str] = None) -> List[Dict]:
+
+    def list_records(self, limit: int | None = None, offset: int = 0, order_by: str | None = None) -> list[dict]:
         """List records with optional ordering"""
         self._ensure_schema()
         self.connect()
         cursor = self.conn.cursor()
-        
+
         # Use provided order_by or default to id
         order_clause = f"ORDER BY {order_by}" if order_by else "ORDER BY id"
-        
+
         sql = f"SELECT * FROM records {order_clause}"
         if limit:
             sql += f" LIMIT {limit} OFFSET {offset}"
-        
+
         cursor.execute(sql)
         return [dict(row) for row in cursor.fetchall()]
-    
+
     def count_records(self) -> int:
         """Count total records"""
         self._ensure_schema()
@@ -627,13 +628,13 @@ class CollectionStore:
         cursor = self.conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM records")
         return cursor.fetchone()[0]
-    
-    def search_records(self, query: str, limit: Optional[int] = None,
-                       filter_tree: Optional[Dict] = None) -> List[Dict]:
+
+    def search_records(self, query: str, limit: int | None = None,
+                       filter_tree: dict | None = None) -> list[dict]:
         """Search records using FTS5 or query parser"""
         self.connect()
         cursor = self.conn.cursor()
-        
+
         # If filter tree provided, use advanced query
         if filter_tree:
             from src.core.query_parser import QueryParser
@@ -645,38 +646,38 @@ class CollectionStore:
                 if filter_tree.get("type") == "text":
                     return self.simple_search(query, limit)
                 return []
-            
+
             # Check if FTS5 table exists before using FTS5 queries
             cursor.execute("""
                 SELECT name FROM sqlite_master
                 WHERE type = 'table' AND name = 'records_fts'
             """)
             fts_exists = cursor.fetchone() is not None
-            
+
             # If WHERE clause uses FTS5 but table doesn't exist, fall back to simple search
             if "records_fts" in where_clause and not fts_exists:
                 return self.simple_search(query, limit)
-            
+
             sql = f"SELECT r.* FROM records r WHERE {where_clause}"
             if limit:
                 sql += f" LIMIT {limit}"
             try:
                 cursor.execute(sql, params)
                 results = [dict(row) for row in cursor.fetchall()]
-                # If FTS5 query returns no results for a non-empty query, 
+                # If FTS5 query returns no results for a non-empty query,
                 # and the query looks like it should match something, try simple search
                 if not results and query and query.strip() and len(query.strip()) >= 2:
                     # Only fall back if it's a simple text query (not a field query)
                     if filter_tree.get("type") == "text":
                         return self.simple_search(query, limit)
                 return results
-            except Exception as e:
+            except Exception:
                 # If query fails, try simple search as fallback
                 # Make sure we use the original query, not a corrupted one
                 if query and query.strip():
                     return self.simple_search(query, limit)
                 return []
-        
+
         # Simple FTS5 search (backward compatible)
         # Check if FTS table exists
         cursor.execute("""
@@ -686,7 +687,7 @@ class CollectionStore:
         if not cursor.fetchone():
             # Fallback to simple LIKE search
             return self.simple_search(query, limit)
-        
+
         # Use FTS5 search - format query for prefix matching
         formatted_query = self._format_fts5_query(query)
         sql = """
@@ -699,31 +700,31 @@ class CollectionStore:
         try:
             cursor.execute(sql, (formatted_query,))
             return [dict(row) for row in cursor.fetchall()]
-        except Exception as e:
+        except Exception:
             # If FTS5 query fails (e.g., syntax error), fall back to simple search
             return self.simple_search(query, limit)
-    
+
     def _format_fts5_query(self, query: str) -> str:
         """Format query string for FTS5 search with proper escaping and prefix matching"""
         if not query:
             return ""
-        
+
         query = query.strip()
-        
+
         # If query contains FTS5 operators (AND, OR, NOT) as part of the text (not operators),
         # we need to quote the entire phrase. Otherwise, use prefix matching.
         # Check if query looks like it might contain operators
         has_operators = any(op in query.upper() for op in [' AND ', ' OR ', ' NOT '])
-        
+
         if has_operators and len(query.split()) > 1:
             # Quote the entire phrase to treat operators as literal text
             escaped = query.replace('"', '""')
             return f'"{escaped}"*'
-        
+
         # For simple queries, use prefix matching per word
         words = query.split()
         formatted_words = []
-        
+
         for word in words:
             # Escape quotes
             escaped_word = word.replace('"', '""')
@@ -731,75 +732,75 @@ class CollectionStore:
             if not escaped_word.endswith('*'):
                 escaped_word += '*'
             formatted_words.append(escaped_word)
-        
+
         # For single word, just return it with *
         if len(formatted_words) == 1:
             return formatted_words[0]
-        
+
         # For multiple words, use AND (both must match) for better results
         return ' AND '.join(formatted_words)
-    
-    def simple_search(self, query: str, limit: Optional[int] = None) -> List[Dict]:
+
+    def simple_search(self, query: str, limit: int | None = None) -> list[dict]:
         """Advanced search using pandas for better filtering"""
         import logging
-        logger = logging.getLogger(__name__)
-        
+        logging.getLogger(__name__)
+
         if not query or not query.strip():
             return []
-        
+
         query = query.strip()
-        
+
         self.connect()
         cursor = self.conn.cursor()
-        
+
         # Get all records as DataFrame for better filtering
         cursor.execute("SELECT * FROM records")
         rows = cursor.fetchall()
-        
+
         if not rows:
             return []
-        
+
         # Get column names
         columns = [description[0] for description in cursor.description]
-        
+
         # Convert to pandas DataFrame
         df = pd.DataFrame(rows, columns=columns)
-        
+
         # Get searchable fields (exclude id)
         fields = self.list_fields()
         searchable_fields = [f["key"] for f in fields if f["key"] != "id"]
-        
+
         if not searchable_fields:
             return []
-        
+
         # Build filter: query must appear in at least one searchable field
         query_lower = query.lower()
         mask = pd.Series([False] * len(df))
-        
+
         for field in searchable_fields:
             if field in df.columns:
                 # Convert to string and search case-insensitively
                 field_mask = df[field].astype(str).str.lower().str.contains(query_lower, na=False, regex=False)
                 mask = mask | field_mask
-        
+
         # Apply filter
         filtered_df = df[mask]
-        
+
         # Log first few matches
         if len(filtered_df) > 0:
-            for idx, row in filtered_df.head(3).iterrows():
+            for _idx, row in filtered_df.head(3).iterrows():
                 matching_fields = []
                 for field in searchable_fields:
                     if field in row and pd.notna(row[field]):
                         field_str = str(row[field]).lower()
                         if query_lower in field_str:
                             matching_fields.append(f"{field}='{row[field]}'")
-        
+
         # Apply limit if specified
         if limit:
             filtered_df = filtered_df.head(limit)
-        
+
         # Convert back to list of dicts
         results = filtered_df.to_dict('records')
-        
+
         return results

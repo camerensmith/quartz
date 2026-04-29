@@ -1,17 +1,16 @@
 """Application styles and themes"""
 
-from typing import Dict
 
 
 class AppStyles:
     """Centralized styling for the application"""
-    
+
     @staticmethod
     def _hex_to_rgb(hex_color: str) -> tuple:
         """Convert hex color to RGB tuple"""
         hex_color = hex_color.lstrip('#')
         return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-    
+
     # Color schemes
     COLOR_SCHEMES = {
         "default": {  # Based on #8000FF
@@ -45,9 +44,9 @@ class AppStyles:
             "accent_dark": "#2a2a2a",
         }
     }
-    
+
     @staticmethod
-    def _get_base_light_theme(colors: Dict[str, str]) -> str:
+    def _get_base_light_theme(colors: dict[str, str]) -> str:
         """Get base light theme with color scheme"""
         # Extract RGB values from primary color for subtle selection
         primary_rgb = AppStyles._hex_to_rgb(colors['primary'])
@@ -473,16 +472,16 @@ QPushButton[class="icon-button"]:pressed {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {colors['primary_dark']}, stop:1 {colors['primary_darker']});
 }}
 """
-    
+
     @staticmethod
-    def _get_base_dark_theme(colors: Dict[str, str]) -> str:
+    def _get_base_dark_theme(colors: dict[str, str]) -> str:
         """Get base dark theme with color scheme - adapts to color scheme"""
         # Extract RGB values from primary color for subtle selection
         primary_rgb = AppStyles._hex_to_rgb(colors['primary'])
-        
+
         # Determine if this is the modern (dark) scheme - needs lighter backgrounds for contrast
         is_modern = colors['primary'] == "#2d2d2d"
-        
+
         # Adaptive background colors based on color scheme
         if is_modern:
             # Modern scheme: use lighter backgrounds for better contrast
@@ -534,13 +533,13 @@ QPushButton[class="icon-button"]:pressed {{
             form_focus_bg = "#1f1f1f"
             form_hover_bg = "#1f1f1f"
             form_hover_border = "#6a6a6a"
-        
+
         # Determine cell focus background color
         if is_modern and bg_cell_focus:
             cell_focus_bg = bg_cell_focus
         else:
             cell_focus_bg = f"rgba({primary_rgb[0]}, {primary_rgb[1]}, {primary_rgb[2]}, {selection_opacity_selected})"
-        
+
         return f"""
 /* Main Window */
 QMainWindow {{
@@ -1091,11 +1090,11 @@ QFileDialog QLabel {{
     color: {text_color};
 }}
 """
-    
+
     @staticmethod
     def get_theme(theme_name: str = "default", color_scheme: str = "default", mode: str = "light") -> str:
         """Get theme by name, color scheme, and mode
-        
+
         Args:
             theme_name: Deprecated, use color_scheme instead
             color_scheme: "default" (#8000FF), "magenta", or "modern"
@@ -1105,20 +1104,20 @@ QFileDialog QLabel {{
         if theme_name in ["light", "dark", "system"]:
             mode = theme_name if theme_name != "system" else "light"
             color_scheme = "default"
-        
+
         colors = AppStyles.COLOR_SCHEMES.get(color_scheme, AppStyles.COLOR_SCHEMES["default"])
-        
+
         if mode == "dark":
             return AppStyles._get_base_dark_theme(colors)
         else:
             return AppStyles._get_base_light_theme(colors)
-    
+
     # Legacy methods for backward compatibility
     @staticmethod
     def get_light_theme() -> str:
         """Get light theme (default color scheme)"""
         return AppStyles.get_theme(color_scheme="default", mode="light")
-    
+
     @staticmethod
     def get_dark_theme() -> str:
         """Get dark theme (default color scheme)"""

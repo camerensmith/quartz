@@ -1,27 +1,25 @@
 """Form view (data entry mode)"""
 
-from typing import List, Dict, Optional
 
+from PySide6.QtCore import QEvent, QPoint, Qt, Signal
 from PySide6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QFormLayout,
-    QLabel,
-    QLineEdit,
-    QTextEdit,
-    QSpinBox,
-    QDoubleSpinBox,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDateEdit,
     QDateTimeEdit,
+    QDoubleSpinBox,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
     QMenu,
-    QMessageBox,
     QPushButton,
-    QApplication,
+    QSpinBox,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
-from PySide6.QtCore import Qt, Signal, QPoint, QEvent
 
 from src.core.collection_store import CollectionStore
 
@@ -34,19 +32,19 @@ class FormView(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.store: Optional[CollectionStore] = None
-        self.fields: List[Dict] = []
-        self.current_record_id: Optional[int] = None
-        self.field_widgets: Dict[str, QWidget] = {}  # Initialize field_widgets dictionary
+        self.store: CollectionStore | None = None
+        self.fields: list[dict] = []
+        self.current_record_id: int | None = None
+        self.field_widgets: dict[str, QWidget] = {}  # Initialize field_widgets dictionary
         self._main_window = None  # Cache reference to main window
 
         self.layout = QVBoxLayout(self)
         self.form_layout = QFormLayout()
         self.layout.addLayout(self.form_layout)
-        
+
         # Button bar for form actions (aligned left, under form fields)
         self.button_layout = QHBoxLayout()
-        
+
         self.save_and_new_btn = QPushButton("Save and New")
         self.save_and_new_btn.clicked.connect(self._save_and_new)
         self.save_and_new_btn.setFocusPolicy(Qt.TabFocus)  # Ensure button is in tab order
@@ -54,11 +52,11 @@ class FormView(QWidget):
         self.save_and_new_btn.installEventFilter(self)
         self.button_layout.addWidget(self.save_and_new_btn)
         self.button_layout.addStretch()  # Push button to left, stretch on right
-        
+
         self.layout.addLayout(self.button_layout)
         self.layout.addStretch()
 
-        self.field_widgets: Dict[str, QWidget] = {}
+        self.field_widgets: dict[str, QWidget] = {}
 
         # Auto-save on field change (with debouncing)
         self.save_timer = None
@@ -68,14 +66,14 @@ class FormView(QWidget):
         # Enable context menu for adding fields
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_form_context_menu)
-        
+
         # Install event filter to catch right-clicks on child widgets
         self.installEventFilter(self)
-        
+
         # Also override mousePressEvent to catch right-clicks anywhere on the form
         self.setMouseTracking(True)
 
-    def set_collection(self, store: Optional[CollectionStore], fields: List[Dict]):
+    def set_collection(self, store: CollectionStore | None, fields: list[dict]):
         """Set the collection and fields"""
         self.store = store
         self.fields = fields
@@ -119,16 +117,16 @@ class FormView(QWidget):
             # Also install event filter on label
             label.installEventFilter(self)
             self.form_layout.addRow(label, widget)
-            
+
             # Set up tab order chain for all form fields
             if first_widget is None:
                 first_widget = widget
             else:
                 # Set tab order: previous widget -> current widget
                 self.setTabOrder(previous_widget, widget)
-            
+
             previous_widget = widget
-        
+
         # Complete the tab order loop: last field -> button -> first field
         if hasattr(self, 'save_and_new_btn') and previous_widget:
             # After last form field, go to Save and New button
@@ -137,7 +135,7 @@ class FormView(QWidget):
                 # After button, go to first form field (completes the loop)
                 self.setTabOrder(self.save_and_new_btn, first_widget)
 
-    def _create_field_widget(self, field: Dict) -> QWidget:
+    def _create_field_widget(self, field: dict) -> QWidget:
         """Create a widget for a field type"""
         field_type = field["type"]
 
@@ -204,7 +202,7 @@ class FormView(QWidget):
                 import json
                 try:
                     options = json.loads(options)
-                except:
+                except Exception:
                     options = []
             if isinstance(options, list):
                 widget.addItems([str(opt) for opt in options])
@@ -218,9 +216,9 @@ class FormView(QWidget):
             widget.setMaximumWidth(400)
             return widget
 
-    def _get_widget_value(self, widget: QWidget, field: Dict):
+    def _get_widget_value(self, widget: QWidget, field: dict):
         """Get value from a widget"""
-        from PySide6.QtCore import QDate, QDateTime, Qt
+        from PySide6.QtCore import Qt
 
         if isinstance(widget, QLineEdit):
             return widget.text()
@@ -315,28 +313,28 @@ class FormView(QWidget):
             record_id = self.store.add_record(data)
             self.current_record_id = record_id
             self.record_saved.emit(record_id)
-    
+
     def _save_and_new(self):
         """Save current record and create a new empty form"""
         if not self.store or self._readonly:
             return
-        
+
         # Stop any pending auto-save timer immediately
         if self.save_timer:
             self.save_timer.stop()
             self.save_timer = None
-        
+
         # Save the current record first
         # Temporarily disable auto-save to prevent double-saving
         was_loading = self.loading_record
         self.loading_record = True
-        
+
         # Clear focus from currently focused widget to ensure any pending edits are committed
         # Widget values are read directly, so no need to process events
         focused_widget = QApplication.focusWidget()
         if focused_widget:
             focused_widget.clearFocus()
-        
+
         # Collect data and validate
         data = {}
         validation_errors = {}
@@ -359,10 +357,10 @@ class FormView(QWidget):
             self._show_validation_errors(validation_errors)
             self.loading_record = was_loading
             return
-        
+
         # Clear any previous error indicators
         self._clear_validation_errors()
-        
+
         # Save the record (create new or update existing)
         if self.current_record_id:
             # Update existing record
@@ -373,23 +371,22 @@ class FormView(QWidget):
             record_id = self.store.add_record(data)
             self.current_record_id = record_id
             saved_record_id = record_id
-        
+
         # Emit signal to notify table view (must happen after save)
         self.record_saved.emit(saved_record_id)
-        
+
         # Restore loading flag
         self.loading_record = was_loading
-        
+
         # Now create a new empty form
         self.new_record()
-        
+
         # Don't auto-focus - let user continue working where they were
         # The save is committed, form is cleared, ready for next entry
 
-    def _show_validation_errors(self, errors: Dict[str, str]):
+    def _show_validation_errors(self, errors: dict[str, str]):
         """Display validation errors under fields"""
         from PySide6.QtWidgets import QLabel
-        from PySide6.QtCore import Qt
 
         # Remove existing error labels
         self._clear_validation_errors()
@@ -422,7 +419,7 @@ class FormView(QWidget):
     def _clear_validation_errors(self):
         """Remove validation error labels"""
         if hasattr(self, "error_labels"):
-            for row, label in self.error_labels:
+            for _row, label in self.error_labels:
                 try:
                     # Check if label still exists before trying to remove it
                     if label and label.parent():
@@ -466,9 +463,9 @@ class FormView(QWidget):
         finally:
             self.loading_record = False
 
-    def _set_widget_value(self, widget: QWidget, field: Dict, value):
+    def _set_widget_value(self, widget: QWidget, field: dict, value):
         """Set value in a widget"""
-        from PySide6.QtCore import QDate, QDateTime, Qt
+        from PySide6.QtCore import QDate, QDateTime
 
         if value is None:
             return
@@ -498,7 +495,7 @@ class FormView(QWidget):
 
                 date = datetime.fromisoformat(str(value))
                 widget.setDate(QDate(date.year, date.month, date.day))
-            except:
+            except Exception:
                 pass
         elif isinstance(widget, QDateTimeEdit):
             try:
@@ -506,7 +503,7 @@ class FormView(QWidget):
 
                 dt = datetime.fromisoformat(str(value))
                 widget.setDateTime(QDateTime(dt))
-            except:
+            except Exception:
                 pass
         elif isinstance(widget, QComboBox):
             widget.setCurrentText(str(value))
@@ -525,7 +522,7 @@ class FormView(QWidget):
         """Find and cache reference to main window through parent chain"""
         if self._main_window:
             return self._main_window
-        
+
         parent = self.parent()
         while parent:
             if hasattr(parent, "_add_field") and hasattr(parent, "current_store"):
@@ -536,9 +533,9 @@ class FormView(QWidget):
                 parent = parent.parent()
             else:
                 break
-        
+
         return None
-    
+
     def mousePressEvent(self, event):
         """Override to catch right-clicks anywhere on the form (including empty areas)"""
         if event.button() == Qt.RightButton:
@@ -546,7 +543,7 @@ class FormView(QWidget):
             event.accept()
             return
         super().mousePressEvent(event)
-    
+
     def eventFilter(self, obj, event):
         """Event filter to catch right-clicks on child widgets"""
         if event.type() == QEvent.MouseButtonPress:
@@ -562,13 +559,13 @@ class FormView(QWidget):
                 self._show_form_context_menu(local_pos)
                 return True  # Event handled
         return super().eventFilter(obj, event)
-    
+
     def _add_field_from_form(self):
         """Open Add Field dialog directly"""
         # Find main window if not cached
         if not self._main_window:
             self._find_main_window()
-        
+
         if self._main_window and hasattr(self._main_window, "_add_field"):
             # Call the main window's _add_field method which opens the Add Field dialog
             self._main_window._add_field()
@@ -576,11 +573,11 @@ class FormView(QWidget):
             # If we couldn't find it, show an error
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Error", "Could not find main window. Please select a collection first.")
-    
+
     def set_readonly(self, readonly: bool):
         """Set all form fields to readonly or editable"""
         self._readonly = readonly
-        
+
         for widget in self.field_widgets.values():
             if isinstance(widget, (QLineEdit, QTextEdit)):
                 widget.setReadOnly(readonly)
