@@ -1,0 +1,72 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v2.5.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Executable
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "pyinstaller>=6.0.0"
+
+      - name: Build executable with PyInstaller
+        run: |
+          pyinstaller quartz.spec --clean --noconfirm
+
+      - name: Rename executable with version tag
+        shell: pwsh
+        run: |
+          $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            "${{ github.event.inputs.tag }}"
+          } else {
+            "${{ github.ref_name }}"
+          }
+          $version = $tag -replace '^v', ''
+          $src  = "dist\Quartz.exe"
+          $dest = "dist\Quartz-windows-$version.exe"
+          Rename-Item -Path $src -NewName (Split-Path $dest -Leaf)
+          Write-Output "RELEASE_TAG=$tag"           >> $env:GITHUB_ENV
+          Write-Output "RELEASE_VERSION=$version"   >> $env:GITHUB_ENV
+          Write-Output "EXE_PATH=$dest"             >> $env:GITHUB_ENV
+
+      - name: Upload executable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: quartz-windows-exe
+          path: ${{ env.EXE_PATH }}
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Quartz ${{ env.RELEASE_VERSION }}
+          draft: false
+          prerelease: false
+          files: ${{ env.EXE_PATH }}
+          generate_release_notes: true

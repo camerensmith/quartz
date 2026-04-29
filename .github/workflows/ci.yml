@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install ruff
+        run: pip install "ruff>=0.1.0"
+      - name: Run ruff
+        run: ruff check src/ main.py
+
+  build-check:
+    name: PyInstaller Build Check (Windows)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "pyinstaller>=6.0.0"
+      - name: Verify build
+        run: pyinstaller quartz.spec --clean --noconfirm
+      - name: Confirm executable exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist\Quartz.exe")) {
+            Write-Error "dist\Quartz.exe not found — build failed"
+            exit 1
+          }
+          Write-Output "Build succeeded: dist\Quartz.exe"
