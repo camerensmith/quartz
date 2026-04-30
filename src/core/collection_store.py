@@ -6,8 +6,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
-
 
 class CollectionStore:
     """Manages a single collection's SQLite database"""
@@ -753,7 +751,7 @@ class CollectionStore:
         self.connect()
         cursor = self.conn.cursor()
 
-        # Get all records as DataFrame for better filtering
+        # Get all records for filtering
         cursor.execute("SELECT * FROM records")
         rows = cursor.fetchall()
 
@@ -763,8 +761,8 @@ class CollectionStore:
         # Get column names
         columns = [description[0] for description in cursor.description]
 
-        # Convert to pandas DataFrame
-        df = pd.DataFrame(rows, columns=columns)
+        # Convert rows to list of dicts
+        records = [dict(zip(columns, row, strict=True)) for row in rows]
 
         # Get searchable fields (exclude id)
         fields = self.list_fields()
@@ -775,32 +773,16 @@ class CollectionStore:
 
         # Build filter: query must appear in at least one searchable field
         query_lower = query.lower()
-        mask = pd.Series([False] * len(df))
-
-        for field in searchable_fields:
-            if field in df.columns:
-                # Convert to string and search case-insensitively
-                field_mask = df[field].astype(str).str.lower().str.contains(query_lower, na=False, regex=False)
-                mask = mask | field_mask
-
-        # Apply filter
-        filtered_df = df[mask]
-
-        # Log first few matches
-        if len(filtered_df) > 0:
-            for _idx, row in filtered_df.head(3).iterrows():
-                matching_fields = []
-                for field in searchable_fields:
-                    if field in row and pd.notna(row[field]):
-                        field_str = str(row[field]).lower()
-                        if query_lower in field_str:
-                            matching_fields.append(f"{field}='{row[field]}'")
+        filtered = []
+        for record in records:
+            for field in searchable_fields:
+                value = record.get(field)
+                if value is not None and query_lower in str(value).lower():
+                    filtered.append(record)
+                    break
 
         # Apply limit if specified
         if limit:
-            filtered_df = filtered_df.head(limit)
+            filtered = filtered[:limit]
 
-        # Convert back to list of dicts
-        results = filtered_df.to_dict('records')
-
-        return results
+        return filtered
