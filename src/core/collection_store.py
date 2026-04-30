@@ -762,7 +762,7 @@ class CollectionStore:
         columns = [description[0] for description in cursor.description]
 
         # Convert rows to list of dicts
-        records = [dict(zip(columns, row, strict=False)) for row in rows]
+        records = [dict(zip(columns, row, strict=True)) for row in rows]
 
         # Get searchable fields (exclude id)
         fields = self.list_fields()
