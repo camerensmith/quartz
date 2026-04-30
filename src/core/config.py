@@ -2,35 +2,35 @@
 
 import json
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any
 
 
 class Config:
     """Manages application settings and preferences"""
-    
-    def __init__(self, config_path: Optional[Path] = None):
+
+    def __init__(self, config_path: Path | None = None):
         if config_path is None:
             # Default config location
             from PySide6.QtCore import QStandardPaths
             config_dir = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppConfigLocation))
             config_dir.mkdir(parents=True, exist_ok=True)
             config_path = config_dir / "quartz_config.json"
-        
+
         self.config_path = config_path
-        self.data: Dict[str, Any] = self.load()
-    
-    def load(self) -> Dict[str, Any]:
+        self.data: dict[str, Any] = self.load()
+
+    def load(self) -> dict[str, Any]:
         """Load configuration from file"""
         if self.config_path.exists():
             try:
-                with open(self.config_path, 'r', encoding='utf-8') as f:
+                with open(self.config_path, encoding='utf-8') as f:
                     return json.load(f)
             except Exception:
                 pass
-        
+
         return self.default_config()
-    
-    def default_config(self) -> Dict[str, Any]:
+
+    def default_config(self) -> dict[str, Any]:
         """Return default configuration"""
         return {
             "workspace_path": str(Path.home() / "Quartz"),
@@ -57,27 +57,27 @@ class Config:
             "auto_check_for_updates": False,  # Auto-check for updates on startup
             "update_ignored_versions": [],  # List of versions user chose to ignore
         }
-    
+
     def save(self):
         """Save configuration to file"""
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.config_path, 'w', encoding='utf-8') as f:
             json.dump(self.data, f, indent=2)
-    
+
     def get(self, key: str, default=None):
         """Get a configuration value"""
         return self.data.get(key, default)
-    
+
     def set(self, key: str, value: Any):
         """Set a configuration value"""
         self.data[key] = value
         self.save()
-    
+
     @property
     def workspace_path(self) -> Path:
         """Get workspace path"""
         return Path(self.get("workspace_path", str(Path.home() / "Quartz")))
-    
+
     @workspace_path.setter
     def workspace_path(self, value: Path):
         """Set workspace path"""

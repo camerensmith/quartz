@@ -1,18 +1,18 @@
 """Audit Trail Dialog - shows undo/redo history"""
 
-from PySide6.QtWidgets import (
-    QDialog,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLabel,
-    QTableWidget,
-    QTableWidgetItem,
-    QPushButton,
-    QHeaderView,
-    QAbstractItemView,
-)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QDialog,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+)
 
 
 class AuditTrailDialog(QDialog):

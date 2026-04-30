@@ -1,33 +1,37 @@
 """Filter creation dialog"""
 
-from typing import Dict, Optional
+
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
-    QComboBox, QLineEdit, QWidget, QGroupBox, QFormLayout
+    QComboBox,
+    QDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLineEdit,
+    QPushButton,
+    QVBoxLayout,
 )
-from PySide6.QtCore import Qt
 
 from src.core.collection_store import CollectionStore
 
 
 class FilterDialog(QDialog):
     """Dialog for creating filters"""
-    
-    def __init__(self, parent=None, store: Optional[CollectionStore] = None):
+
+    def __init__(self, parent=None, store: CollectionStore | None = None):
         super().__init__(parent)
         self.store = store
         self.filter_result = None
-        
+
         self.setWindowTitle("Add Filter")
         self.setMinimumWidth(400)
         self.setMinimumHeight(200)
-        
+
         self._init_ui()
-    
+
     def _init_ui(self):
         """Initialize UI"""
         layout = QVBoxLayout(self)
-        
+
         # Filter type (field or text)
         type_group = QGroupBox("Filter Type")
         type_layout = QVBoxLayout()
@@ -37,7 +41,7 @@ class FilterDialog(QDialog):
         type_layout.addWidget(self.type_combo)
         type_group.setLayout(type_layout)
         layout.addWidget(type_group)
-        
+
         # Field selector (only shown for field type)
         self.field_group = QGroupBox("Field")
         field_layout = QVBoxLayout()
@@ -54,7 +58,7 @@ class FilterDialog(QDialog):
         self.field_group.setLayout(field_layout)
         self.field_group.setVisible(True)  # Default to field
         layout.addWidget(self.field_group)
-        
+
         # Operator
         operator_group = QGroupBox("Operator")
         operator_layout = QVBoxLayout()
@@ -65,7 +69,7 @@ class FilterDialog(QDialog):
         operator_layout.addWidget(self.operator_combo)
         operator_group.setLayout(operator_layout)
         layout.addWidget(operator_group)
-        
+
         # Value
         value_group = QGroupBox("Value")
         value_layout = QVBoxLayout()
@@ -74,35 +78,35 @@ class FilterDialog(QDialog):
         value_layout.addWidget(self.value_input)
         value_group.setLayout(value_layout)
         layout.addWidget(value_group)
-        
+
         # Buttons
         button_layout = QHBoxLayout()
         button_layout.addStretch()
-        
+
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
-        
+
         add_btn = QPushButton("Add Filter")
         add_btn.setDefault(True)
         add_btn.clicked.connect(self._add_filter)
-        
+
         button_layout.addWidget(cancel_btn)
         button_layout.addWidget(add_btn)
         layout.addLayout(button_layout)
-    
+
     def _on_type_changed(self, text: str):
         """Handle filter type change"""
         self.field_group.setVisible(text == "Field")
-    
+
     def _add_filter(self):
         """Add the filter"""
         filter_type = self.type_combo.currentText()
         operator = self.operator_combo.currentText()
         value = self.value_input.text().strip()
-        
+
         if not value:
             return
-        
+
         if filter_type == "Field":
             field_key = self.field_combo.currentData()  # Get the stored key
             field_label = self.field_combo.currentText()  # Get the displayed label
@@ -120,10 +124,10 @@ class FilterDialog(QDialog):
                 "operator": operator,
                 "value": value
             }
-        
+
         self.accept()
-    
-    def get_filter(self) -> Optional[Dict]:
+
+    def get_filter(self) -> dict | None:
         """Get the created filter"""
         return self.filter_result
 

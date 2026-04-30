@@ -1,15 +1,15 @@
 """Undo/Redo command system"""
 
 import datetime
-from typing import Any, Dict, Optional, Callable
 from abc import ABC, abstractmethod
+from typing import Any
 
 
 class Command(ABC):
     """Base class for undoable commands"""
 
     def __init__(self):
-        self.timestamp: datetime.datetime = datetime.datetime.now(datetime.timezone.utc)
+        self.timestamp: datetime.datetime = datetime.datetime.now(datetime.UTC)
 
     @property
     def description(self) -> str:
@@ -20,7 +20,7 @@ class Command(ABC):
     def undo(self):
         """Undo this command"""
         pass
-    
+
     @abstractmethod
     def redo(self):
         """Redo this command"""
@@ -29,8 +29,8 @@ class Command(ABC):
 
 class RecordUpdateCommand(Command):
     """Command for updating a record"""
-    
-    def __init__(self, store, record_id: int, old_data: Dict[str, Any], new_data: Dict[str, Any],
+
+    def __init__(self, store, record_id: int, old_data: dict[str, Any], new_data: dict[str, Any],
                  collection_name: str = "", field_label: str = ""):
         super().__init__()
         self.store = store
@@ -55,7 +55,7 @@ class RecordUpdateCommand(Command):
         """Restore old data"""
         if self.store:
             self.store.update_record(self.record_id, self.old_data)
-    
+
     def redo(self):
         """Apply new data"""
         if self.store:
@@ -64,8 +64,8 @@ class RecordUpdateCommand(Command):
 
 class RecordAddCommand(Command):
     """Command for adding a record"""
-    
-    def __init__(self, store, record_id: int, data: Dict[str, Any], collection_name: str = ""):
+
+    def __init__(self, store, record_id: int, data: dict[str, Any], collection_name: str = ""):
         super().__init__()
         self.store = store
         self.record_id = record_id
@@ -82,7 +82,7 @@ class RecordAddCommand(Command):
         """Delete the added record"""
         if self.store:
             self.store.delete_record(self.record_id)
-    
+
     def redo(self):
         """Re-add the record"""
         if self.store:
@@ -93,8 +93,8 @@ class RecordAddCommand(Command):
 
 class RecordDeleteCommand(Command):
     """Command for deleting a record"""
-    
-    def __init__(self, store, record_id: int, data: Dict[str, Any], collection_name: str = ""):
+
+    def __init__(self, store, record_id: int, data: dict[str, Any], collection_name: str = ""):
         super().__init__()
         self.store = store
         self.record_id = record_id
@@ -119,7 +119,7 @@ class RecordDeleteCommand(Command):
             new_id = self.store.add_record(restore_data)
             # Update the record_id for potential redo
             self.record_id = new_id
-    
+
     def redo(self):
         """Delete the record again"""
         if self.store:

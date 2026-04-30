@@ -7,10 +7,10 @@ from pathlib import Path
 def resource_path(relative_path: str) -> Path:
     """
     Get absolute path to resource, works for dev and PyInstaller.
-    
+
     Args:
         relative_path: Path relative to project root (e.g., "assets/icon.png")
-    
+
     Returns:
         Absolute Path to the resource
     """
@@ -20,17 +20,17 @@ def resource_path(relative_path: str) -> Path:
     except AttributeError:
         # Running in development mode
         base_path = Path(__file__).parent.parent.parent
-    
+
     return base_path / relative_path
 
 
 def asset_path(asset_name: str) -> Path:
     """
     Get path to an asset file.
-    
+
     Args:
         asset_name: Asset filename (e.g., "create_collection.png")
-    
+
     Returns:
         Path to the asset file
     """
