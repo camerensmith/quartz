@@ -2942,10 +2942,7 @@ class MainWindow(QMainWindow):
         self.update_check_threads.append(thread)
 
         def _dismiss():
-            # Guard against being called more than once (e.g. via signal slot
-            # and then again via thread.finished)
-            if checking_msg.isVisible():
-                checking_msg.close()
+            checking_msg.close()
 
         def on_update_available(update_info):
             _dismiss()
