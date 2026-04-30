@@ -127,8 +127,15 @@ class UpdateProgressDialog(QDialog):
                         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
                     )
 
-                    # Close application after a short delay
-                    QTimer.singleShot(500, QApplication.instance().quit)
+                    # Explicitly close this dialog then quit the application.
+                    # Calling accept() first exits the nested exec() event loop
+                    # before quit() runs, so the quit signal reaches app.exec()
+                    # reliably instead of being consumed by the inner loop.
+                    def _close_and_quit():
+                        self.accept()
+                        QApplication.instance().quit()
+
+                    QTimer.singleShot(500, _close_and_quit)
                 else:
                     self._on_error("Installer script not found")
             else:
