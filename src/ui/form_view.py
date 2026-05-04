@@ -3,7 +3,7 @@
 
 from typing import Any
 
-from PySide6.QtCore import QEvent, QPoint, Qt, Signal
+from PySide6.QtCore import QDate, QDateTime, QEvent, QPoint, Qt, QTime, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -24,6 +24,9 @@ from PySide6.QtWidgets import (
 )
 
 from src.core.collection_store import CollectionStore
+
+EMPTY_FORM_DATE = QDate(100, 1, 1)
+EMPTY_FORM_DATETIME = QDateTime(EMPTY_FORM_DATE, QTime(0, 0))
 
 
 class FormView(QWidget):
@@ -170,10 +173,8 @@ class FormView(QWidget):
             return widget
 
         elif field_type == "date":
-            from PySide6.QtCore import QDate
-
             widget = QDateEdit()
-            widget.setMinimumDate(QDate(100, 1, 1))
+            widget.setMinimumDate(EMPTY_FORM_DATE)
             widget.setSpecialValueText("")
             widget.setDate(widget.minimumDate())
             widget.setMaximumWidth(200)
@@ -185,10 +186,8 @@ class FormView(QWidget):
             return widget
 
         elif field_type == "datetime":
-            from PySide6.QtCore import QDate, QDateTime, QTime
-
             widget = QDateTimeEdit()
-            widget.setMinimumDateTime(QDateTime(QDate(100, 1, 1), QTime(0, 0)))
+            widget.setMinimumDateTime(EMPTY_FORM_DATETIME)
             widget.setSpecialValueText("")
             widget.setDateTime(widget.minimumDateTime())
             widget.setMaximumWidth(250)
