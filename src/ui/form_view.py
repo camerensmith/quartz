@@ -1,6 +1,8 @@
 """Form view (data entry mode)"""
 
 
+from typing import Any
+
 from PySide6.QtCore import QEvent, QPoint, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
@@ -58,8 +60,6 @@ class FormView(QWidget):
 
         self.field_widgets: dict[str, QWidget] = {}
 
-        # Auto-save on field change (with debouncing)
-        self.save_timer = None
         self.loading_record = False  # Flag to prevent auto-save during loading
         self._readonly = False  # Track readonly state
 
@@ -173,7 +173,9 @@ class FormView(QWidget):
             from PySide6.QtCore import QDate
 
             widget = QDateEdit()
-            widget.setDate(QDate.currentDate())
+            widget.setMinimumDate(QDate(100, 1, 1))
+            widget.setSpecialValueText("")
+            widget.setDate(widget.minimumDate())
             widget.setMaximumWidth(200)
             # Apply date format from config
             date_format = self._get_date_format()
@@ -183,10 +185,12 @@ class FormView(QWidget):
             return widget
 
         elif field_type == "datetime":
-            from PySide6.QtCore import QDateTime
+            from PySide6.QtCore import QDate, QDateTime, QTime
 
             widget = QDateTimeEdit()
-            widget.setDateTime(QDateTime.currentDateTime())
+            widget.setMinimumDateTime(QDateTime(QDate(100, 1, 1), QTime(0, 0)))
+            widget.setSpecialValueText("")
+            widget.setDateTime(widget.minimumDateTime())
             widget.setMaximumWidth(250)
             # Apply datetime format from config
             datetime_format = self._get_datetime_format()
@@ -207,6 +211,7 @@ class FormView(QWidget):
             if isinstance(options, list):
                 widget.addItems([str(opt) for opt in options])
             widget.setMaximumWidth(300)
+            widget.setCurrentIndex(-1)
             widget.currentTextChanged.connect(self._on_field_changed)
             return widget
 
@@ -232,9 +237,13 @@ class FormView(QWidget):
             return widget.isChecked()
         elif isinstance(widget, QDateEdit):
             date = widget.date()
+            if date == widget.minimumDate():
+                return ""
             return date.toString(Qt.DateFormat.ISODate)
         elif isinstance(widget, QDateTimeEdit):
             dt = widget.dateTime()
+            if dt == widget.minimumDateTime():
+                return ""
             return dt.toString(Qt.DateFormat.ISODate)
         elif isinstance(widget, QComboBox):
             return widget.currentText()
@@ -242,45 +251,34 @@ class FormView(QWidget):
         return None
 
     def _on_field_changed(self):
-        """Handle field value change (auto-save)"""
-        if not self.store or self.loading_record or self._readonly:
+        """Handle field value changes without auto-saving records."""
+        if self.loading_record or self._readonly:
             return
-
-        # Debounce saves (wait 500ms after last change)
-        from PySide6.QtCore import QTimer
-
-        if self.save_timer:
-            self.save_timer.stop()
-
-        self.save_timer = QTimer()
-        self.save_timer.setSingleShot(True)
-        self.save_timer.timeout.connect(self.save_record)
-        self.save_timer.start(500)  # 500ms delay
 
     def new_record(self):
         """Create a new empty record in the form"""
+        self.loading_record = True
         self.current_record_id = None
+        self._clear_validation_errors()
 
-        # Clear all field widgets
-        for field in self.fields:
-            field_key = field["key"]
-            widget = self.field_widgets.get(field_key)
-            if widget:
-                # Set to default value or empty
-                default_value = field.get("default_value")
-                self._set_widget_value(
-                    widget, field, default_value if default_value else None
-                )
+        try:
+            # Clear all field widgets
+            for field in self.fields:
+                field_key = field["key"]
+                widget = self.field_widgets.get(field_key)
+                if widget:
+                    default_value = field.get("default_value")
+                    self._set_widget_value(
+                        widget, field, default_value if default_value else None
+                    )
+        finally:
+            self.loading_record = False
 
-    def save_record(self):
-        """Save current record (create new if no ID, update if ID exists)"""
-        if not self.store or self._readonly:
-            return
+    def _collect_form_data(self) -> tuple[dict[str, Any], dict[str, str]]:
+        """Collect form data and validation errors."""
+        data: dict[str, Any] = {}
+        validation_errors: dict[str, str] = {}
 
-        data = {}
-        validation_errors = {}
-
-        # Collect data and validate
         from src.core.validation import FieldValidator
 
         for field in self.fields:
@@ -290,44 +288,36 @@ class FormView(QWidget):
                 value = self._get_widget_value(widget, field)
                 data[field_key] = value
 
-                # Validate
                 result = FieldValidator.validate(field, value)
                 if not result.valid:
                     validation_errors[field_key] = result.error_message
 
+        return data, validation_errors
+
+    def save_record(self):
+        """Save current form contents as a new record."""
+        if not self.store or self._readonly:
+            return None
+
+        data, validation_errors = self._collect_form_data()
+
         # Show validation errors
         if validation_errors:
             self._show_validation_errors(validation_errors)
-            return  # Don't save if invalid
+            return None
 
         # Clear any previous error indicators
         self._clear_validation_errors()
 
-        # Create new record or update existing
-        if self.current_record_id:
-            # Update existing record
-            self.store.update_record(self.current_record_id, data)
-            self.record_saved.emit(self.current_record_id)
-        else:
-            # Create new record
-            record_id = self.store.add_record(data)
-            self.current_record_id = record_id
-            self.record_saved.emit(record_id)
+        record_id = self.store.add_record(data)
+        self.current_record_id = None
+        self.record_saved.emit(record_id)
+        return record_id
 
     def _save_and_new(self):
         """Save current record and create a new empty form"""
         if not self.store or self._readonly:
             return
-
-        # Stop any pending auto-save timer immediately
-        if self.save_timer:
-            self.save_timer.stop()
-            self.save_timer = None
-
-        # Save the current record first
-        # Temporarily disable auto-save to prevent double-saving
-        was_loading = self.loading_record
-        self.loading_record = True
 
         # Clear focus from currently focused widget to ensure any pending edits are committed
         # Widget values are read directly, so no need to process events
@@ -335,48 +325,9 @@ class FormView(QWidget):
         if focused_widget:
             focused_widget.clearFocus()
 
-        # Collect data and validate
-        data = {}
-        validation_errors = {}
-        from src.core.validation import FieldValidator
-
-        for field in self.fields:
-            field_key = field["key"]
-            widget = self.field_widgets.get(field_key)
-            if widget:
-                value = self._get_widget_value(widget, field)
-                data[field_key] = value
-
-                # Validate
-                result = FieldValidator.validate(field, value)
-                if not result.valid:
-                    validation_errors[field_key] = result.error_message
-
-        # If there are validation errors, show them and don't proceed
-        if validation_errors:
-            self._show_validation_errors(validation_errors)
-            self.loading_record = was_loading
+        saved_record_id = self.save_record()
+        if saved_record_id is None:
             return
-
-        # Clear any previous error indicators
-        self._clear_validation_errors()
-
-        # Save the record (create new or update existing)
-        if self.current_record_id:
-            # Update existing record
-            self.store.update_record(self.current_record_id, data)
-            saved_record_id = self.current_record_id
-        else:
-            # Create new record
-            record_id = self.store.add_record(data)
-            self.current_record_id = record_id
-            saved_record_id = record_id
-
-        # Emit signal to notify table view (must happen after save)
-        self.record_saved.emit(saved_record_id)
-
-        # Restore loading flag
-        self.loading_record = was_loading
 
         # Now create a new empty form
         self.new_record()
@@ -476,6 +427,22 @@ class FormView(QWidget):
         from PySide6.QtCore import QDate, QDateTime
 
         if value is None:
+            if isinstance(widget, QLineEdit):
+                widget.clear()
+            elif isinstance(widget, QTextEdit):
+                widget.clear()
+            elif isinstance(widget, QSpinBox):
+                widget.setValue(widget.minimum())
+            elif isinstance(widget, QDoubleSpinBox):
+                widget.setValue(widget.minimum())
+            elif isinstance(widget, QCheckBox):
+                widget.setChecked(False)
+            elif isinstance(widget, QDateEdit):
+                widget.setDate(widget.minimumDate())
+            elif isinstance(widget, QDateTimeEdit):
+                widget.setDateTime(widget.minimumDateTime())
+            elif isinstance(widget, QComboBox):
+                widget.setCurrentIndex(-1)
             return
 
         # Set value (signals will fire but loading_record flag prevents auto-save)

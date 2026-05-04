@@ -1575,10 +1575,7 @@ class MainWindow(QMainWindow):
         if self.table_view.model.rowCount() > 0:
             self.table_view.selectRow(0)
             if self.form_toggle.isChecked():
-                # Load first record in form view
-                if len(self.table_view.model.filtered_records) > 0:
-                    record = self.table_view.model.filtered_records[0]
-                    self.form_view.load_record(record["id"])
+                self.form_view.new_record()
 
     def _switch_to_view(self, index: int):
         """Switch to Table (0) or Form (1) view
@@ -1593,18 +1590,7 @@ class MainWindow(QMainWindow):
         self.content_stack.setCurrentIndex(stack_index)
 
         if index == 1:  # Form view (stack index 2)
-            # Load selected record in form view
-            selection = self.table_view.selectionModel().selectedRows()
-            if selection:
-                row = selection[0].row()
-                model = self.table_view.model
-                if row < len(model.filtered_records):
-                    record = model.filtered_records[row]
-                    self.form_view.load_record(record["id"])
-            elif self.table_view.model.rowCount() > 0:
-                # Load first record if none selected
-                record = self.table_view.model.filtered_records[0]
-                self.form_view.load_record(record["id"])
+            self.form_view.new_record()
 
     def _on_search(self, query: str):
         """Handle search query (real-time as user types)"""
