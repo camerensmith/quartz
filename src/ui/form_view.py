@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from src.core.collection_store import CollectionStore
 
+# Use an out-of-band minimum value so Qt date editors can render a visually blank form state.
 EMPTY_FORM_DATE = QDate(100, 1, 1)
 EMPTY_FORM_DATETIME = QDateTime(EMPTY_FORM_DATE, QTime(0, 0))
 
@@ -210,6 +211,7 @@ class FormView(QWidget):
             if isinstance(options, list):
                 widget.addItems([str(opt) for opt in options])
             widget.setMaximumWidth(300)
+            # -1 keeps the form blank until the user explicitly chooses an option.
             widget.setCurrentIndex(-1)
             widget.currentTextChanged.connect(self._on_field_changed)
             return widget
