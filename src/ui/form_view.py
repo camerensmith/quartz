@@ -25,7 +25,8 @@ from PySide6.QtWidgets import (
 
 from src.core.collection_store import CollectionStore
 
-# Use an out-of-band minimum value so Qt date editors can render a visually blank form state.
+# Use year 100 as an out-of-band minimum so blank widgets stay far outside normal user data
+# without relying on unsupported year-0/1 handling in Qt date editors.
 EMPTY_FORM_DATE = QDate(100, 1, 1)
 EMPTY_FORM_DATETIME = QDateTime(EMPTY_FORM_DATE, QTime(0, 0))
 
@@ -252,7 +253,7 @@ class FormView(QWidget):
         return None
 
     def _on_field_changed(self):
-        """Handle field value changes without auto-saving records."""
+        """Ignore interactive field changes unless the form is locked or mid-reset."""
         if self.loading_record or self._readonly:
             return
 
@@ -295,8 +296,8 @@ class FormView(QWidget):
 
         return data, validation_errors
 
-    def save_record(self):
-        """Save current form contents as a new record without entering edit mode."""
+    def save_record(self) -> int | None:
+        """Save current form contents as a new record and return its ID, or None if invalid."""
         if not self.store or self._readonly:
             return None
 
