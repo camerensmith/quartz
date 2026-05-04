@@ -294,7 +294,7 @@ class FormView(QWidget):
         return data, validation_errors
 
     def save_record(self):
-        """Save current form contents as a new record."""
+        """Save current form contents as a new record without entering edit mode."""
         if not self.store or self._readonly:
             return None
 
@@ -309,6 +309,7 @@ class FormView(QWidget):
         self._clear_validation_errors()
 
         record_id = self.store.add_record(data)
+        # Keep the form in new-entry mode so form view never edits committed records.
         self.current_record_id = None
         self.record_saved.emit(record_id)
         return record_id
