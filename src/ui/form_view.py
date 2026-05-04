@@ -381,6 +381,14 @@ class FormView(QWidget):
         # Now create a new empty form
         self.new_record()
 
+        # Show "Record added" notification in the status bar
+        main_window = self._find_main_window()
+        if main_window:
+            try:
+                main_window.statusBar().showMessage("Record added", 3000)
+            except AttributeError:
+                pass
+
         # Don't auto-focus - let user continue working where they were
         # The save is committed, form is cleared, ready for next entry
 
