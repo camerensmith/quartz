@@ -25,9 +25,8 @@ from PySide6.QtWidgets import (
 
 from src.core.collection_store import CollectionStore
 
-# Use year 100 as an out-of-band minimum so blank widgets stay far outside normal user data
-# while still remaining well inside Qt's supported date range.
-EMPTY_FORM_DATE = QDate(100, 1, 1)
+# Use Qt's minimum supported year as the blank-form sentinel for date editors.
+EMPTY_FORM_DATE = QDate(1, 1, 1)
 EMPTY_FORM_DATETIME = QDateTime(EMPTY_FORM_DATE, QTime(0, 0))
 
 
@@ -253,7 +252,7 @@ class FormView(QWidget):
         return None
 
     def _on_field_changed(self):
-        """Ignore interactive field changes when the form is locked or mid-reset."""
+        """Handle field changes while guarding against readonly and form-reset states."""
         if self.loading_record or self._readonly:
             return
 
@@ -277,7 +276,7 @@ class FormView(QWidget):
             self.loading_record = False
 
     def _collect_form_data(self) -> tuple[dict[str, Any], dict[str, str]]:
-        """Collect form data and validation errors."""
+        """Collect form data and return (field_data, validation_errors)."""
         data: dict[str, Any] = {}
         validation_errors: dict[str, str] = {}
 
