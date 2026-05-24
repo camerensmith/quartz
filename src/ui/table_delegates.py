@@ -113,7 +113,7 @@ class FieldTypeDelegate(QStyledItemDelegate):
 
         elif self.field_type in ("select", "single-select"):
             editor = QComboBox(parent)
-            options = self.field.get("options", [])
+            options = self.field.get("options") or []
             if isinstance(options, str):
                 import json
                 try:

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -18,6 +19,91 @@ from PySide6.QtWidgets import (
 )
 
 from src.core.collection_store import CollectionStore
+
+
+class SelectOptionsDialog(QDialog):
+    """Simple dialog for editing select field options"""
+
+    def __init__(self, options: list, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Edit Select Options")
+        self.setMinimumWidth(300)
+        self.setMinimumHeight(300)
+        if parent:
+            self.setStyleSheet(parent.styleSheet())
+
+        self._option_inputs: list[QLineEdit] = []
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Options for this dropdown:"))
+
+        # Scroll area for options list
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setMaximumHeight(200)
+        self._options_widget = QWidget()
+        self._options_layout = QVBoxLayout(self._options_widget)
+        self._options_layout.setContentsMargins(0, 0, 0, 0)
+        self._options_layout.setSpacing(4)
+        scroll_area.setWidget(self._options_widget)
+        layout.addWidget(scroll_area)
+
+        # Populate existing options
+        for opt in options:
+            self._add_option_row(str(opt))
+        # Ensure at least one empty row
+        if not options:
+            self._add_option_row("")
+
+        add_btn = QPushButton("+ Add Option")
+        add_btn.clicked.connect(lambda: self._add_option_row(""))
+        layout.addWidget(add_btn)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setProperty("class", "secondary")
+        cancel_btn.clicked.connect(self.reject)
+        ok_btn = QPushButton("OK")
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(self._validate_and_accept)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(ok_btn)
+        layout.addLayout(btn_row)
+
+    def _add_option_row(self, text: str):
+        row_widget = QWidget()
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+
+        line_edit = QLineEdit(text)
+        line_edit.setPlaceholderText("Option value")
+        self._option_inputs.append(line_edit)
+        row_layout.addWidget(line_edit)
+
+        remove_btn = QPushButton("✕")
+        remove_btn.setFixedWidth(28)
+        remove_btn.setFlat(True)
+        remove_btn.clicked.connect(lambda: self._remove_option_row(row_widget, line_edit))
+        row_layout.addWidget(remove_btn)
+
+        self._options_layout.addWidget(row_widget)
+
+    def _remove_option_row(self, row_widget: QWidget, line_edit: QLineEdit):
+        if line_edit in self._option_inputs:
+            self._option_inputs.remove(line_edit)
+        row_widget.setParent(None)
+        row_widget.deleteLater()
+
+    def _validate_and_accept(self):
+        options = [inp.text().strip() for inp in self._option_inputs if inp.text().strip()]
+        if not options:
+            QMessageBox.warning(self, "Validation", "Please add at least one option.")
+            return
+        self.accept()
+
+    def get_options(self) -> list:
+        return [inp.text().strip() for inp in self._option_inputs if inp.text().strip()]
 
 
 class ReorderableFieldsTable(QTableWidget):
@@ -49,6 +135,21 @@ class CollectionPropertiesDialog(QDialog):
         self._load_description()
         self._load_fields()
 
+    def _options_for_row(self, row: int) -> list:
+        """Retrieve stored options for a given row via the key item's UserRole data"""
+        key_item = self.fields_table.item(row, 2)
+        if key_item:
+            data = key_item.data(Qt.UserRole)
+            if isinstance(data, list):
+                return data
+        return []
+
+    def _store_options_for_row(self, row: int, options: list):
+        """Store options for a row in the key item's UserRole data"""
+        key_item = self.fields_table.item(row, 2)
+        if key_item:
+            key_item.setData(Qt.UserRole, options)
+
     def _init_ui(self):
         """Initialize UI"""
         layout = QVBoxLayout(self)
@@ -65,12 +166,13 @@ class CollectionPropertiesDialog(QDialog):
         # Fields table
         layout.addWidget(QLabel("Fields:"))
         self.fields_table = ReorderableFieldsTable()
-        self.fields_table.setColumnCount(6)  # Added column for up/down buttons
-        self.fields_table.setHorizontalHeaderLabels(["", "Alias", "Key", "Type", "Required", "Indexed"])
+        self.fields_table.setColumnCount(7)  # Added column for Options
+        self.fields_table.setHorizontalHeaderLabels(["", "Alias", "Key", "Type", "Required", "Indexed", "Options"])
         self.fields_table.horizontalHeader().setStretchLastSection(True)
         self.fields_table.setSelectionBehavior(QTableWidget.SelectRows)
         # Set first column width for buttons
         self.fields_table.setColumnWidth(0, 45)
+        self.fields_table.setColumnWidth(6, 90)  # Options column
 
         # Connect itemChanged to auto-generate keys for new fields
         self.fields_table.itemChanged.connect(self._on_item_changed)
@@ -145,12 +247,16 @@ class CollectionPropertiesDialog(QDialog):
             # Key (read-only) (column 2)
             key_item = QTableWidgetItem(field["key"])
             key_item.setFlags(key_item.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsUserCheckable)
+            # Store options in UserRole so they travel with the row when reordered
+            existing_options = field.get("options") or []
+            key_item.setData(Qt.UserRole, existing_options)
             self.fields_table.setItem(row, 2, key_item)
 
             # Type (column 3)
             type_combo = QComboBox()
             type_combo.addItems(["text", "notes", "integer", "decimal", "checkbox", "date", "datetime", "select"])
             type_combo.setCurrentText(field["type"])
+            type_combo.currentTextChanged.connect(lambda text, r=row: self._on_type_changed(r, text))
             self.fields_table.setCellWidget(row, 3, type_combo)
 
             # Required (column 4)
@@ -166,6 +272,9 @@ class CollectionPropertiesDialog(QDialog):
             # Only allow checking, not editing text
             indexed_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
             self.fields_table.setItem(row, 5, indexed_item)
+
+            # Options (column 6)
+            self._update_options_cell(row, field["type"])
 
     def _add_field(self):
         """Add a new field row - opens dialog to prompt for field details"""
@@ -189,12 +298,16 @@ class CollectionPropertiesDialog(QDialog):
             # Key (editable) (column 2)
             key_item = QTableWidgetItem(field_data["key"])
             key_item.setFlags(key_item.flags() & ~Qt.ItemIsUserCheckable)
+            # Store options from the dialog in UserRole
+            options = field_data.get("options") or []
+            key_item.setData(Qt.UserRole, options)
             self.fields_table.setItem(row, 2, key_item)
 
             # Type (column 3)
             type_combo = QComboBox()
             type_combo.addItems(["text", "notes", "integer", "decimal", "checkbox", "date", "datetime", "select"])
             type_combo.setCurrentText(field_data["type"])
+            type_combo.currentTextChanged.connect(lambda text, r=row: self._on_type_changed(r, text))
             self.fields_table.setCellWidget(row, 3, type_combo)
 
             # Required (column 4)
@@ -210,6 +323,9 @@ class CollectionPropertiesDialog(QDialog):
             # Only allow checking, not editing text
             indexed_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
             self.fields_table.setItem(row, 5, indexed_item)
+
+            # Options (column 6)
+            self._update_options_cell(row, field_data["type"])
 
     def _move_field_up(self, row: int):
         """Move a field up one position"""
@@ -240,11 +356,18 @@ class CollectionPropertiesDialog(QDialog):
                 row1_data[col].setFlags(item1.flags())
                 if item1.checkState() is not None:
                     row1_data[col].setCheckState(item1.checkState())
+                # Preserve UserRole data (options stored on key item)
+                user_data = item1.data(Qt.UserRole)
+                if user_data is not None:
+                    row1_data[col].setData(Qt.UserRole, user_data)
             if item2:
                 row2_data[col] = QTableWidgetItem(item2.text())
                 row2_data[col].setFlags(item2.flags())
                 if item2.checkState() is not None:
                     row2_data[col].setCheckState(item2.checkState())
+                user_data = item2.data(Qt.UserRole)
+                if user_data is not None:
+                    row2_data[col].setData(Qt.UserRole, user_data)
 
             # Store widgets
             widget1 = self.fields_table.cellWidget(row1, col)
@@ -286,7 +409,7 @@ class CollectionPropertiesDialog(QDialog):
             if isinstance(col, int):
                 self.fields_table.setItem(row1, col, item)
 
-        # Restore widgets
+        # Restore widgets (type combos) — reconnect signals with new row indices
         for key, widget_data in row1_data.items():
             if isinstance(key, str) and key.startswith('widget_'):
                 col = int(key.split('_')[1])
@@ -294,6 +417,8 @@ class CollectionPropertiesDialog(QDialog):
                     combo = QComboBox()
                     combo.addItems(widget_data['items'])
                     combo.setCurrentText(widget_data['current'])
+                    if col == 3:  # Type column
+                        combo.currentTextChanged.connect(lambda text, r=row2: self._on_type_changed(r, text))
                     self.fields_table.setCellWidget(row2, col, combo)
 
         for key, widget_data in row2_data.items():
@@ -303,14 +428,51 @@ class CollectionPropertiesDialog(QDialog):
                     combo = QComboBox()
                     combo.addItems(widget_data['items'])
                     combo.setCurrentText(widget_data['current'])
+                    if col == 3:  # Type column
+                        combo.currentTextChanged.connect(lambda text, r=row1: self._on_type_changed(r, text))
                     self.fields_table.setCellWidget(row1, col, combo)
 
         # Recreate button widgets with correct row references
         self._create_move_buttons(row2)  # row1 moved to row2
         self._create_move_buttons(row1)  # row2 moved to row1
 
+        # Refresh Options cells for both rows (type may have changed)
+        type_w2 = self.fields_table.cellWidget(row2, 3)
+        if isinstance(type_w2, QComboBox):
+            self._update_options_cell(row2, type_w2.currentText())
+        type_w1 = self.fields_table.cellWidget(row1, 3)
+        if isinstance(type_w1, QComboBox):
+            self._update_options_cell(row1, type_w1.currentText())
+
         # Update button connections
         self._update_move_buttons()
+
+    def _update_options_cell(self, row: int, field_type: str):
+        """Update the Options cell for a row based on the current field type"""
+        if field_type == "select":
+            options = self._options_for_row(row)
+            count = len(options)
+            label = f"{count} option{'s' if count != 1 else ''}"
+            btn = QPushButton(label)
+            btn.setFlat(True)
+            btn.setStyleSheet("text-decoration: underline; color: #7c3aed;")
+            btn.clicked.connect(lambda checked, r=row: self._edit_options(r))
+            self.fields_table.setCellWidget(row, 6, btn)
+        else:
+            self.fields_table.setCellWidget(row, 6, None)
+
+    def _on_type_changed(self, row: int, new_type: str):
+        """React when the type combo for a row changes"""
+        self._update_options_cell(row, new_type)
+
+    def _edit_options(self, row: int):
+        """Open a dialog to edit select options for the given row"""
+        current_options = self._options_for_row(row)
+        dialog = SelectOptionsDialog(current_options, self)
+        if dialog.exec():
+            new_options = dialog.get_options()
+            self._store_options_for_row(row, new_options)
+            self._update_options_cell(row, "select")
 
     def _create_move_buttons(self, row: int):
         """Create up/down buttons for a specific row"""
@@ -427,12 +589,19 @@ class CollectionPropertiesDialog(QDialog):
             required = required_item.checkState() == Qt.Checked if required_item else False
             indexed = indexed_item.checkState() == Qt.Checked if indexed_item else False
 
+            # Retrieve options stored in the key item's UserRole
+            options = None
+            if field_type == "select" and key_item:
+                stored = key_item.data(Qt.UserRole)
+                options = stored if isinstance(stored, list) else None
+
             field_data = {
                 "key": key,
                 "type": field_type,
                 "label": label,
                 "required": required,
-                "indexed": indexed
+                "indexed": indexed,
+                "options": options,
             }
 
             if key in existing_keys:
@@ -448,7 +617,8 @@ class CollectionPropertiesDialog(QDialog):
                     field_type=field["type"],
                     label=field["label"],
                     required=field["required"],
-                    indexed=field["indexed"]
+                    indexed=field["indexed"],
+                    options=field.get("options"),
                 )
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to add field '{field['label']}': {str(e)}")
@@ -462,21 +632,32 @@ class CollectionPropertiesDialog(QDialog):
                 # If reordering fails, continue anyway (might be old schema without field_order column)
                 pass
 
-        # Update existing fields (for now, we can only update required/indexed)
-        # Full field editing would require schema migration
+        # Update existing fields
         for field in updated_fields:
             existing = existing_fields.get(field["key"])
             if existing:
-                # Update required and indexed status
-                # Note: Full field editing (type, key changes) would need more complex migration
-                if existing["required"] != field["required"] or existing["indexed"] != field["indexed"]:
-                    # Update in database
+                required_changed = existing["required"] != field["required"]
+                indexed_changed = existing["indexed"] != field["indexed"]
+                # Update options for select fields when they have changed
+                existing_options = existing.get("options") or []
+                new_options = field.get("options") or []
+                options_changed = (field["type"] == "select") and (existing_options != new_options)
+
+                if required_changed or indexed_changed or options_changed:
                     from datetime import datetime
                     cursor = self.store.conn.cursor()
+                    import json as _json
                     cursor.execute(
-                        """UPDATE fields SET required=?, indexed=?, updated_at=? WHERE field_key=?""",
-                        (1 if field["required"] else 0, 1 if field["indexed"] else 0,
-                         datetime.now().isoformat(), field["key"])
+                        """UPDATE fields SET required=?, indexed=?, options=?, updated_at=? WHERE field_key=?""",
+                        (
+                            1 if field["required"] else 0,
+                            1 if field["indexed"] else 0,
+                            _json.dumps(new_options) if options_changed else (
+                                _json.dumps(existing_options) if existing_options else None
+                            ),
+                            datetime.now().isoformat(),
+                            field["key"],
+                        ),
                     )
                     self.store.conn.commit()
 
