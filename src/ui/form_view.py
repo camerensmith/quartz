@@ -33,8 +33,8 @@ EMPTY_FORM_DATETIME = QDateTime(EMPTY_FORM_DATE, QTime(0, 0))
 class FormView(QWidget):
     """Form view widget"""
 
-    # Signal emitted when record is saved
-    record_saved = Signal(int)
+    # Signal emitted when record is saved (object to support both int and str IDs)
+    record_saved = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)

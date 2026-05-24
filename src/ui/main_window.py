@@ -2220,7 +2220,7 @@ class MainWindow(QMainWindow):
                 if rec["id"] == new_id:
                     model.index(i, 0)
                     self.table_view.selectRow(i)
-                    if self.content_stack.currentIndex() == 1:  # Form view
+                    if self.content_stack.currentIndex() == 2:  # Form view
                         self.form_view.load_record(new_id)
                     break
 
@@ -3362,7 +3362,7 @@ class MainWindow(QMainWindow):
                     model.index(current_row - 1, 0)
                     self.table_view.selectRow(current_row - 1)
                     # If in form view, load the record
-                    if self.content_stack.currentIndex() == 1:  # Form view
+                    if self.content_stack.currentIndex() == 2:  # Form view
                         record = model.filtered_records[current_row - 1]
                         self.form_view.load_record(record["id"])
 
@@ -3380,7 +3380,7 @@ class MainWindow(QMainWindow):
                 # Select next row
                 self.table_view.selectRow(current_row + 1)
                 # If in form view, load the record
-                if self.content_stack.currentIndex() == 1:  # Form view
+                if self.content_stack.currentIndex() == 2:  # Form view
                     record = model.filtered_records[current_row + 1]
                     self.form_view.load_record(record["id"])
 
@@ -3399,7 +3399,7 @@ class MainWindow(QMainWindow):
         else:
             self.nav_label.setText(f"Records: {filtered} of {total} (filtered)")
 
-    def _on_record_saved(self, record_id: int):
+    def _on_record_saved(self, record_id):
         """Handle record saved from form view"""
         # Refresh table view to show new/updated record
         if self.table_view.model and self.table_view.model.store:
