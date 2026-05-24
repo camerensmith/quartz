@@ -1,5 +1,6 @@
 """Update downloader and installer"""
 
+import os
 import sys
 import tempfile
 import urllib.request
@@ -58,95 +59,34 @@ class UpdateDownloader:
     @staticmethod
     def install_update(downloaded_file: Path, current_exe_path: Path | None = None) -> bool:
         """
-        Install the update by replacing the current executable.
+        Install the update by launching the downloaded installer executable.
+
+        The installer handles replacing the existing installation in-place.
+        The calling code should quit the application shortly after this returns.
 
         Args:
-            downloaded_file: Path to downloaded update file
-            current_exe_path: Path to current executable (auto-detected if None)
+            downloaded_file: Path to downloaded installer executable
+            current_exe_path: Unused; kept for API compatibility
 
         Returns:
-            True if installation script was created successfully
+            True if the installer was launched successfully
         """
-        if current_exe_path is None:
-            # Auto-detect current executable path
-            if hasattr(sys, '_MEIPASS'):
-                # Running from PyInstaller bundle
-                current_exe_path = Path(sys.executable)
-            else:
-                # Running from script
-                current_exe_path = Path(sys.executable)
-
-        if not current_exe_path.exists():
-            raise Exception(f"Current executable not found: {current_exe_path}")
-
         if not downloaded_file.exists():
             raise Exception(f"Downloaded file not found: {downloaded_file}")
 
-        # Create installer script
         if sys.platform == 'win32':
-            return UpdateDownloader._create_windows_installer(
-                downloaded_file, current_exe_path
-            )
+            return UpdateDownloader._launch_windows_installer(downloaded_file)
         else:
             raise Exception(f"Auto-update not supported on {sys.platform}")
 
     @staticmethod
-    def _create_windows_installer(
-        new_exe: Path,
-        current_exe: Path
-    ) -> bool:
-        """Create Windows batch script to install update"""
-        temp_dir = Path(tempfile.gettempdir()) / "quartz_updates"
-        temp_dir.mkdir(exist_ok=True)
-
-        installer_script = temp_dir / "install_update.bat"
-
-        # Create batch script that:
-        # 1. Waits a moment for current app to close
-        # 2. Replaces the exe (with retry logic)
-        # 3. Starts the new exe
-        # 4. Deletes itself
-
-        # Use absolute paths
-        new_exe_abs = new_exe.resolve()
-        current_exe_abs = current_exe.resolve()
-        installer_script_abs = installer_script.resolve()
-
-        script_content = f"""@echo off
-REM Quartz Update Installer
-echo Waiting for Quartz to close...
-timeout /t 3 /nobreak >nul
-
-REM Try to replace the executable (retry up to 5 times)
-set retries=0
-:retry
-copy /Y "{new_exe_abs}" "{current_exe_abs}" >nul 2>&1
-if %ERRORLEVEL% EQU 0 (
-    echo Update installed successfully!
-    start "" "{current_exe_abs}"
-    timeout /t 1 /nobreak >nul
-    del /F /Q "{installer_script_abs}" >nul 2>&1
-    del /F /Q "{new_exe_abs}" >nul 2>&1
-    exit /B 0
-) else (
-    set /a retries+=1
-    if %retries% LSS 5 (
-        echo Retrying installation... (%retries%/5)
-        timeout /t 2 /nobreak >nul
-        goto retry
-    ) else (
-        echo Update installation failed! The executable may be in use.
-        echo Please close Quartz and run this installer again: {installer_script_abs}
-        pause
-        exit /B 1
-    )
-)
-"""
-
+    def _launch_windows_installer(installer_exe: Path) -> bool:
+        """Launch the Windows installer executable via the shell so it runs independently."""
         try:
-            with open(installer_script, 'w') as f:
-                f.write(script_content)
+            # os.startfile is the Windows-native way to open a file as if double-clicked;
+            # the process is fully detached from the current app.
+            os.startfile(str(installer_exe))
             return True
         except Exception as e:
-            raise Exception(f"Failed to create installer script: {e}") from e
+            raise Exception(f"Failed to launch installer: {e}") from e
 
