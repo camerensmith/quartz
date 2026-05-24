@@ -2917,11 +2917,11 @@ class MainWindow(QMainWindow):
         """Manually check for updates from Tools menu"""
         from PySide6.QtWidgets import QMessageBox
 
-        # Show non-blocking "checking" indicator
+        # Show non-blocking "checking" indicator with Cancel so the user can dismiss it
         checking_msg = QMessageBox(self)
         checking_msg.setWindowTitle("Checking for Updates")
         checking_msg.setText("Checking for updates...")
-        checking_msg.setStandardButtons(QMessageBox.StandardButton.NoButton)
+        checking_msg.setStandardButtons(QMessageBox.StandardButton.Cancel)
         checking_msg.show()
 
         thread = UpdateCheckWorker(self)
@@ -2950,6 +2950,14 @@ class MainWindow(QMainWindow):
                 f"Could not check for updates:\n{error_msg}"
             )
 
+        def on_cancel(_button):
+            """Stop the check thread when the user clicks Cancel"""
+            if thread.isRunning():
+                thread.terminate()
+                thread.wait(1000)
+            self._cleanup_thread(thread)
+
+        checking_msg.buttonClicked.connect(on_cancel)
         thread.update_available.connect(on_update_available)
         thread.no_update.connect(on_no_update)
         thread.error.connect(on_error)

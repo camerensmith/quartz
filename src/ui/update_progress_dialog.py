@@ -1,6 +1,5 @@
 """Progress dialog for update download and installation"""
 
-import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
@@ -99,47 +98,26 @@ class UpdateProgressDialog(QDialog):
     def _on_download_finished(self, downloaded_file: Path):
         """Handle download completion"""
         self.downloaded_file = downloaded_file
-        self.status_label.setText("Download complete! Installing...")
+        self.status_label.setText("Download complete! Launching installer...")
         self.progress_bar.setValue(100)
         self.cancel_btn.setEnabled(False)
 
-        # Install the update
         try:
-            import subprocess
-
             from PySide6.QtCore import QTimer
             from PySide6.QtWidgets import QApplication
 
-            # Create installer script
-            success = UpdateDownloader.install_update(downloaded_file)
+            UpdateDownloader.install_update(downloaded_file)
 
-            if success:
-                # Run installer script
-                temp_dir = Path(tempfile.gettempdir()) / "quartz_updates"
-                installer_script = temp_dir / "install_update.bat"
+            self.status_label.setText(
+                "Installer launched. Quartz will now close.\n"
+                "Please follow the installer instructions to complete the update."
+            )
 
-                if installer_script.exists():
-                    # Start installer (this will replace exe and restart app)
-                    # Use DETACHED_PROCESS to allow app to close
-                    subprocess.Popen(
-                        [str(installer_script)],
-                        shell=True,
-                        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
-                    )
+            def _close_and_quit():
+                self.accept()
+                QApplication.instance().quit()
 
-                    # Explicitly close this dialog then quit the application.
-                    # Calling accept() first exits the nested exec() event loop
-                    # before quit() runs, so the quit signal reaches app.exec()
-                    # reliably instead of being consumed by the inner loop.
-                    def _close_and_quit():
-                        self.accept()
-                        QApplication.instance().quit()
-
-                    QTimer.singleShot(500, _close_and_quit)
-                else:
-                    self._on_error("Installer script not found")
-            else:
-                self._on_error("Failed to create installer script")
+            QTimer.singleShot(1500, _close_and_quit)
 
         except Exception as e:
             self._on_error(f"Installation failed: {e}")
