@@ -10,6 +10,7 @@ a = Analysis(
     datas=[
         ('assets', 'assets'),
         ('quartz.png', '.'),
+        ('pyproject.toml', '.'),
     ],
     hiddenimports=[
         'openpyxl',  # Required for Excel file import/export
