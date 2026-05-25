@@ -105,6 +105,7 @@ class RecordsTableModel(QAbstractTableModel):
         self._max_cache_size = 2000  # Maximum cached records (prevent memory bloat)
         self._formatted_cache: dict[tuple, Any] = {}  # Cache formatted values: (row, col, role) -> value
         self._filter_error: str | None = None  # Error message when filters are invalid
+        self._is_filtered: bool = False  # True when a search/filter is active (even if results are empty)
 
     def _get_date_format(self) -> str:
         """Get date format from config"""
@@ -137,12 +138,14 @@ class RecordsTableModel(QAbstractTableModel):
             self.beginResetModel()
             self.records = []
             self.filtered_records = []
+            self._is_filtered = False
             self._record_cache.clear()
             self._loaded_batches.clear()
             self._total_count = 0
             self.endResetModel()
         else:
             self._filter_error = None  # Clear filter error when collection changes
+            self._is_filtered = False
             self._refresh_data()
 
     def _refresh_data(self):
@@ -278,8 +281,8 @@ class RecordsTableModel(QAbstractTableModel):
         if self._filter_error:
             return 1
 
-        # If we have filtered_records, use that count
-        if self.filtered_records:
+        # If we have filtered_records, or a filter is active (even with 0 results), use that count
+        if self.filtered_records or self._is_filtered:
             return len(self.filtered_records)
 
         # Otherwise, use virtualized count or regular records count
@@ -606,7 +609,7 @@ class RecordsTableModel(QAbstractTableModel):
                     self._record_cache[i] = record
 
             # Populate filtered_records from records (or use search results if filtered)
-            if not self.filtered_records:
+            if not self.filtered_records and not self._is_filtered:
                 # If no filter applied, use all records
                 self.filtered_records = self.records.copy()
             elif len(self.filtered_records) < len(self.records):
@@ -617,7 +620,7 @@ class RecordsTableModel(QAbstractTableModel):
                 self.filtered_records = self.records.copy()
 
         # Ensure we have records to sort
-        if not self.filtered_records:
+        if not self.filtered_records and not self._is_filtered:
             # Try to get records if we don't have them
             if not self.records:
                 self.records = self.store.list_records()

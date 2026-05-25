@@ -1627,13 +1627,16 @@ class MainWindow(QMainWindow):
 
         # Get all records (either all or filtered by text search)
         if not query.strip() and not self.active_filters:
-            # Show all records
+            # Show all records - no filter active
+            model._is_filtered = False
             if model._virtualized and model._total_count > 500:
                 model._search_query = None
                 model._refresh_data()
             else:
                 model.filtered_records = model.records.copy() if model.records else []
         else:
+            # A search or filter is active
+            model._is_filtered = True
             # Use simple search for text query (autofilter as user types)
             if query.strip():
                 model.filtered_records = self.current_store.simple_search(query)
@@ -3399,13 +3402,14 @@ class MainWindow(QMainWindow):
             return
 
         model = self.table_view.model
-        total = len(model.records)
+        # Use _total_count for virtualized collections (records list is empty in that mode)
+        total = model._total_count if (model._virtualized and model._total_count > 500) else len(model.records)
         filtered = len(model.filtered_records)
 
-        if filtered == total:
-            self.nav_label.setText(f"Records: {total}")
-        else:
+        if model._is_filtered:
             self.nav_label.setText(f"Records: {filtered} of {total} (filtered)")
+        else:
+            self.nav_label.setText(f"Records: {total}")
 
     def _on_record_saved(self, record_id):
         """Handle record saved from form view"""
