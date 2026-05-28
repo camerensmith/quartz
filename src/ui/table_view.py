@@ -1143,12 +1143,11 @@ class TableView(QTableView):
         index = self.indexAt(event.pos())
 
         if not index.isValid():
-            # Clicked outside any cell - clear selection
+            # Clicked outside any cell - deselect the current record only
             # Only clear if not clicking on headers or other table components
             if event.pos().y() > self.horizontalHeader().height():
                 if self.selectionModel():
                     self.selectionModel().clearSelection()
-                    self.setCurrentIndex(QModelIndex())  # Clear current index
                     # Update header boldness
                     if hasattr(self.model, '_current_column') and self.model._current_column >= 0:
                         old_column = self.model._current_column
