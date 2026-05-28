@@ -2854,21 +2854,31 @@ class MainWindow(QMainWindow):
         expanded_view = self.config.get("expanded_view", False)
 
         if expanded_view:
-            # Expanded view: maximize everything to show all data
+            # Expanded view: show more content with word wrap and taller rows
             self.table_view.setWordWrap(True)  # Enable word wrap for text fields
-            # Set row height to auto-resize based on content
+            # Use a fixed taller row height for expanded view. ResizeToContents must
+            # NOT be used here: it causes Qt to query a size hint for every row,
+            # which triggers batch-loading across the entire virtualized dataset and
+            # leads to a crash or extreme lag, especially on startup when the setting
+            # is persisted.
+            # 3× the normal row height, with a floor of 72 px (3 × 24 default)
+            # to give wrapped text enough vertical space.
+            expanded_row_height = max(72, self.config.get("table_row_height", 24) * 3)
+            self.table_view.verticalHeader().setDefaultSectionSize(expanded_row_height)
             self.table_view.verticalHeader().setSectionResizeMode(
-                self.table_view.verticalHeader().ResizeMode.ResizeToContents
+                self.table_view.verticalHeader().ResizeMode.Fixed
             )
-            # Set column width to auto-resize based on content
-            self.table_view.horizontalHeader().setSectionResizeMode(
-                self.table_view.horizontalHeader().ResizeMode.ResizeToContents
-            )
-            # Resize columns to contents
-            self.table_view.resizeColumnsToContents()
             # Set minimum row height to accommodate wrapped text and checkboxes
             # Need at least 24px to fit checkbox (20px) + 2px padding on each side
             self.table_view.verticalHeader().setMinimumSectionSize(24)
+            # Use Interactive column mode so the user can resize columns manually.
+            # ResizeToContents for horizontal header would also continuously re-measure
+            # all columns on every data change or scroll, causing the same lag issues.
+            self.table_view.horizontalHeader().setSectionResizeMode(
+                self.table_view.horizontalHeader().ResizeMode.Interactive
+            )
+            # One-time column resize to fit current content
+            self.table_view.resizeColumnsToContents()
         else:
             # Normal view: apply configured settings
             self.table_view.setWordWrap(False)  # Disable word wrap
