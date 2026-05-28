@@ -3366,15 +3366,15 @@ class MainWindow(QMainWindow):
         selection = self.table_view.selectionModel().selectedRows()
         if selection:
             current_row = selection[0].row()
-            if current_row > 0:
-                # Select previous row
-                model = self.table_view.model
-                if current_row - 1 < len(model.filtered_records):
-                    model.index(current_row - 1, 0)
-                    self.table_view.selectRow(current_row - 1)
-                    # If in form view, load the record
-                    if self.content_stack.currentIndex() == 2:  # Form view
-                        record = model.filtered_records[current_row - 1]
+            model = self.table_view.model
+            prev_row = current_row - 1
+            if 0 <= prev_row < model.rowCount():
+                self.table_view.selectRow(prev_row)
+                self.table_view.scrollTo(model.index(prev_row, 0))
+                # If in form view, load the record
+                if self.content_stack.currentIndex() == 2:  # Form view
+                    record = model._get_record(prev_row)
+                    if record:
                         self.form_view.load_record(record["id"])
 
     def _next_record(self):
@@ -3387,13 +3387,16 @@ class MainWindow(QMainWindow):
         if selection:
             current_row = selection[0].row()
             model = self.table_view.model
-            if current_row + 1 < len(model.filtered_records):
+            next_row = current_row + 1
+            if next_row < model.rowCount():
                 # Select next row
-                self.table_view.selectRow(current_row + 1)
+                self.table_view.selectRow(next_row)
+                self.table_view.scrollTo(model.index(next_row, 0))
                 # If in form view, load the record
                 if self.content_stack.currentIndex() == 2:  # Form view
-                    record = model.filtered_records[current_row + 1]
-                    self.form_view.load_record(record["id"])
+                    record = model._get_record(next_row)
+                    if record:
+                        self.form_view.load_record(record["id"])
 
     def _update_navigation(self):
         """Update navigation label"""
