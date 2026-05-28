@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSpinBox,
     QTabWidget,
@@ -104,25 +105,50 @@ class PreferencesDialog(QDialog):
         workspace_group = QGroupBox("Workspace")
         workspace_layout = QVBoxLayout()
 
-        workspace_path_layout = QHBoxLayout()
-        workspace_path_layout.addWidget(QLabel("Workspace Path:"))
+        # Local workspace path
+        local_path_layout = QHBoxLayout()
+        local_path_layout.addWidget(QLabel("Local Workspace:"))
         self.workspace_path_input = QLineEdit()
         self.workspace_path_input.setReadOnly(True)
-        workspace_path_layout.addWidget(self.workspace_path_input)
-
+        local_path_layout.addWidget(self.workspace_path_input)
         browse_workspace_btn = QPushButton("Browse...")
         browse_workspace_btn.clicked.connect(self._browse_workspace)
-        workspace_path_layout.addWidget(browse_workspace_btn)
+        local_path_layout.addWidget(browse_workspace_btn)
+        workspace_layout.addLayout(local_path_layout)
 
-        workspace_layout.addLayout(workspace_path_layout)
+        # Cloud / secondary workspace path
+        cloud_path_layout = QHBoxLayout()
+        cloud_path_layout.addWidget(QLabel("Cloud / Secondary:"))
+        self.cloud_workspace_path_input = QLineEdit()
+        self.cloud_workspace_path_input.setReadOnly(True)
+        self.cloud_workspace_path_input.setPlaceholderText(
+            "Not set — browse to a cloud-synced folder (Google Drive, Dropbox, OneDrive…)"
+        )
+        cloud_path_layout.addWidget(self.cloud_workspace_path_input)
+        browse_cloud_btn = QPushButton("Browse...")
+        browse_cloud_btn.clicked.connect(self._browse_cloud_workspace)
+        cloud_path_layout.addWidget(browse_cloud_btn)
+        clear_cloud_btn = QPushButton("Clear")
+        clear_cloud_btn.setProperty("class", "secondary")
+        clear_cloud_btn.clicked.connect(self._clear_cloud_workspace)
+        cloud_path_layout.addWidget(clear_cloud_btn)
+        workspace_layout.addLayout(cloud_path_layout)
 
         cloud_hint = QLabel(
-            "💡 To sync with cloud storage, set your workspace to a folder inside "
-            "Google Drive, Dropbox, OneDrive, or any other cloud-synced location."
+            "💡 To sync with cloud storage, set the Cloud / Secondary path to a folder "
+            "inside your cloud-synced location, then use <b>Sync Workspaces…</b> to "
+            "copy collections between them."
         )
         cloud_hint.setWordWrap(True)
         cloud_hint.setStyleSheet("color: gray; font-size: 11px;")
         workspace_layout.addWidget(cloud_hint)
+
+        sync_row = QHBoxLayout()
+        sync_row.addStretch()
+        sync_btn = QPushButton("Sync Workspaces…")
+        sync_btn.clicked.connect(self._open_sync_dialog)
+        sync_row.addWidget(sync_btn)
+        workspace_layout.addLayout(sync_row)
 
         workspace_group.setLayout(workspace_layout)
         layout.addWidget(workspace_group)
@@ -338,6 +364,41 @@ class PreferencesDialog(QDialog):
         if dir_path:
             self.workspace_path_input.setText(dir_path)
 
+    def _browse_cloud_workspace(self):
+        """Browse for cloud / secondary workspace directory"""
+        dir_path = QFileDialog.getExistingDirectory(
+            self, "Select Cloud / Secondary Workspace Directory"
+        )
+        if dir_path:
+            self.cloud_workspace_path_input.setText(dir_path)
+
+    def _clear_cloud_workspace(self):
+        """Clear the cloud / secondary workspace path"""
+        self.cloud_workspace_path_input.clear()
+
+    def _open_sync_dialog(self):
+        """Open the workspace sync dialog"""
+        local_path = self.workspace_path_input.text()
+        cloud_path = self.cloud_workspace_path_input.text()
+
+        if not cloud_path:
+            QMessageBox.information(
+                self,
+                "No Cloud Workspace",
+                "Please set a Cloud / Secondary workspace path before syncing.",
+            )
+            return
+
+        from src.ui.workspace_sync_dialog import WorkspaceSyncDialog
+
+        dialog = WorkspaceSyncDialog(
+            self,
+            local_path=local_path,
+            cloud_path=cloud_path,
+            config=self.config,
+        )
+        dialog.exec()
+
     def _load_settings(self):
         """Load current settings"""
         if not self.config:
@@ -345,6 +406,8 @@ class PreferencesDialog(QDialog):
 
         # General
         self.workspace_path_input.setText(str(self.config.workspace_path))
+        cloud_ws_path = self.config.get("cloud_workspace_path", "")
+        self.cloud_workspace_path_input.setText(cloud_ws_path)
         self.autosave_check.setChecked(self.config.get("autosave", True))
         self.backup_check.setChecked(self.config.get("backup_enabled", True))
         self.auto_check_updates_check.setChecked(self.config.get("auto_check_for_updates", False))
@@ -398,6 +461,9 @@ class PreferencesDialog(QDialog):
         workspace_path = self.workspace_path_input.text()
         if workspace_path:
             self.config.workspace_path = Path(workspace_path)
+
+        cloud_workspace_path = self.cloud_workspace_path_input.text()
+        self.config.set("cloud_workspace_path", cloud_workspace_path)
 
         self.config.set("autosave", self.autosave_check.isChecked())
         self.config.set("backup_enabled", self.backup_check.isChecked())
