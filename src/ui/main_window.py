@@ -31,6 +31,7 @@ from src.core.version import VERSION
 from src.core.workspace import Workspace
 from src.ui.advanced_search_dialog import AdvancedSearchDialog
 from src.ui.form_view import FormView
+from src.ui.sanitize_dialog import SanitizeDialog
 from src.ui.styles import AppStyles
 from src.ui.table_view import TableView
 from src.ui.update_dialog import UpdateDialog
@@ -351,6 +352,18 @@ class MainWindow(QMainWindow):
         self.adv_search_btn.setIconSize(QSize(16, 16))  # Slightly smaller than button to ensure it fits
         self.adv_search_btn.clicked.connect(self._open_advanced_search)
         top_bar.addWidget(self.adv_search_btn)
+
+        # Sanitize button
+        broom_icon_path = asset_path("broom.png")
+        self.sanitize_btn = QPushButton()
+        if broom_icon_path.exists():
+            self.sanitize_btn.setIcon(QIcon(str(broom_icon_path)))
+        self.sanitize_btn.setProperty("class", "nav")
+        self.sanitize_btn.setToolTip("Sanitize (find and merge duplicate records)")
+        self.sanitize_btn.setFixedSize(20, 20)
+        self.sanitize_btn.setIconSize(QSize(16, 16))
+        self.sanitize_btn.clicked.connect(self._open_sanitize_dialog)
+        top_bar.addWidget(self.sanitize_btn)
 
         right_layout.addWidget(self.top_bar_widget)
 
@@ -1945,6 +1958,19 @@ class MainWindow(QMainWindow):
         """Open advanced search dialog"""
         dialog = AdvancedSearchDialog(self, self.workspace)
         dialog.exec()
+
+    def _open_sanitize_dialog(self):
+        """Open the sanitize dialog for the current collection"""
+        if not self.current_store:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Sanitize", "Please open a collection first.")
+            return
+        fields = self.current_store.list_fields()
+        dialog = SanitizeDialog(self, store=self.current_store, fields=fields)
+        dialog.exec()
+        # Refresh view in case records were merged
+        if self.current_collection:
+            self._perform_search()
 
     def _open_collection_and_record(self, collection_name: str, record_id: int):
         """Open a specific collection and navigate to a specific record"""
