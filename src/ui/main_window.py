@@ -1962,7 +1962,6 @@ class MainWindow(QMainWindow):
     def _open_sanitize_dialog(self):
         """Open the sanitize dialog for the current collection"""
         if not self.current_store:
-            from PySide6.QtWidgets import QMessageBox
             QMessageBox.information(self, "Sanitize", "Please open a collection first.")
             return
         fields = self.current_store.list_fields()

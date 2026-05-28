@@ -66,8 +66,9 @@ class SanitizeDialog(QDialog):
         options_layout.setSpacing(14)
 
         self.auto_merge_check = QCheckBox(
-            "Automatically merge 1:1 matches  \u2014  records match selected FIELD as well as "
-            "other fields 1:1 are fully merged automatically, otherwise they are just displayed as normal"
+            "Automatically merge 1:1 matches \u2014 records that match in the selected field "
+            "and all other fields are fully merged automatically; "
+            "otherwise they are displayed for manual review"
         )
         self.auto_merge_check.setWordWrap(True)
         options_layout.addWidget(self.auto_merge_check)
@@ -77,6 +78,10 @@ class SanitizeDialog(QDialog):
 
         self.passive_flag_check = QCheckBox(
             "Automatically flag new records that 1:1 match existing records (passive)"
+        )
+        self.passive_flag_check.setToolTip(
+            "When enabled, new records whose field values exactly match an existing record "
+            "will be highlighted for review. This is a passive, non-destructive check."
         )
         options_layout.addWidget(self.passive_flag_check)
 
@@ -158,6 +163,7 @@ class SanitizeDialog(QDialog):
             return
 
         merged_count = 0
+        failed_ids: list[int] = []
 
         for field_value, dup_records in duplicates.items():
             if auto_merge and self._all_fields_match(dup_records):
@@ -166,47 +172,65 @@ class SanitizeDialog(QDialog):
                     try:
                         self.store.delete_record(record["id"])
                         merged_count += 1
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        failed_ids.append(record.get("id", "?"))
+                        # Show the group so the user can handle it manually
+                        self._add_group_to_results(field_value, dup_records, field_key,
+                                                    note=f"Auto-merge failed: {exc}")
             else:
                 # Display duplicate group
-                group_label = QLabel(
-                    f"<b>Duplicate value:</b> \"{field_value}\"  "
-                    f"<span style='color:#888'>({len(dup_records)} records)</span>"
+                self._add_group_to_results(field_value, dup_records, field_key)
+
+        # Notify about auto-merges and failures
+        if merged_count or failed_ids:
+            msg_parts = []
+            if merged_count:
+                msg_parts.append(f"Auto-merged {merged_count} duplicate record(s).")
+            if failed_ids:
+                ids_str = ", ".join(str(i) for i in failed_ids)
+                msg_parts.append(
+                    f"Failed to merge {len(failed_ids)} record(s) (IDs: {ids_str}). "
+                    "They are shown below for manual review."
                 )
-                group_label.setTextFormat(Qt.RichText)
-                group_label.setStyleSheet("padding: 4px 0 2px 0;")
-                self.results_layout.addWidget(group_label)
-
-                for record in dup_records:
-                    record_id = record.get("id", "?")
-                    # Build a short preview of the record's other fields
-                    preview_parts = []
-                    for field in self.fields:
-                        fk = field.get("key")
-                        if fk and fk != "id" and fk != field_key:
-                            val = record.get(fk, "")
-                            if val:
-                                lbl = field.get("alias") or field.get("label") or fk
-                                preview_parts.append(f"{lbl}: {val}")
-                    preview = "  |  ".join(preview_parts[:4]) if preview_parts else "(no other fields)"
-                    row_label = QLabel(f"  • ID {record_id}  —  {preview}")
-                    row_label.setStyleSheet("color: #444; padding: 1px 0 1px 12px;")
-                    self.results_layout.addWidget(row_label)
-
-                separator = QWidget()
-                separator.setFixedHeight(1)
-                separator.setStyleSheet("background-color: #e0e0e0;")
-                self.results_layout.addWidget(separator)
-
-        # Notify about auto-merges
-        if merged_count:
             QMessageBox.information(
                 self,
                 "Sanitize Complete",
-                f"Auto-merged {merged_count} duplicate record(s).\n"
-                "Remaining duplicates (non-identical) are shown below."
+                "\n".join(msg_parts)
             )
+
+    def _add_group_to_results(self, field_value: str, dup_records: list[dict],
+                               field_key: str, note: str | None = None):
+        """Render a duplicate group into the results area"""
+        header_text = (
+            f"<b>Duplicate value:</b> \"{field_value}\"  "
+            f"<span style='color:#888'>({len(dup_records)} records)</span>"
+        )
+        if note:
+            header_text += f"  <span style='color:#c0392b'>[{note}]</span>"
+        group_label = QLabel(header_text)
+        group_label.setTextFormat(Qt.RichText)
+        group_label.setStyleSheet("padding: 4px 0 2px 0;")
+        self.results_layout.addWidget(group_label)
+
+        for record in dup_records:
+            record_id = record.get("id", "?")
+            preview_parts = []
+            for field in self.fields:
+                fk = field.get("key")
+                if fk and fk != "id" and fk != field_key:
+                    val = record.get(fk, "")
+                    if val:
+                        lbl = field.get("alias") or field.get("label") or fk
+                        preview_parts.append(f"{lbl}: {val}")
+            preview = "  |  ".join(preview_parts[:4]) if preview_parts else "(no other fields)"
+            row_label = QLabel(f"  \u2022 ID {record_id}  \u2014  {preview}")
+            row_label.setStyleSheet("color: #444; padding: 1px 0 1px 12px;")
+            self.results_layout.addWidget(row_label)
+
+        separator = QWidget()
+        separator.setFixedHeight(1)
+        separator.setStyleSheet("background-color: #e0e0e0;")
+        self.results_layout.addWidget(separator)
 
     def _all_fields_match(self, records: list[dict]) -> bool:
         """Return True if all records are identical across every field (excluding id)"""
