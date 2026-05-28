@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -90,7 +91,7 @@ class SanitizeDialog(QDialog):
         # Spacer / results area
         self.results_scroll = QScrollArea()
         self.results_scroll.setWidgetResizable(True)
-        self.results_scroll.setFrameShape(QScrollArea.NoFrame)
+        self.results_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.results_container = QWidget()
         self.results_layout = QVBoxLayout(self.results_container)
         self.results_layout.setAlignment(Qt.AlignTop)
