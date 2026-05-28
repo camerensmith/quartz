@@ -379,9 +379,6 @@ class MainWindow(QMainWindow):
         self.filter_chips_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         right_layout.addWidget(self.filter_chips_container)
 
-        # Install event filter on top_bar_widget to detect clicks on empty space
-        self.top_bar_widget.installEventFilter(self)
-
         # Main content area - Stacked widget for Form/Table
         from PySide6.QtWidgets import QStackedWidget
 
@@ -3474,21 +3471,8 @@ class MainWindow(QMainWindow):
                         break
 
     def eventFilter(self, obj, event):
-        """Event filter to detect clicks on empty space in top bar and collections list"""
+        """Event filter to detect clicks on empty space in collections list"""
         from PySide6.QtGui import QMouseEvent
-
-        # Handle mouse press on top bar widget (check if it exists first)
-        if hasattr(self, 'top_bar_widget') and obj == self.top_bar_widget and event.type() == QEvent.MouseButtonPress:
-            if isinstance(event, QMouseEvent) and event.button() == Qt.LeftButton:
-                # Check if click is on empty space (not on child widgets)
-                child_at_pos = obj.childAt(event.pos())
-                if child_at_pos == obj or child_at_pos is None:
-                    # Clicked on empty space, deselect collection
-                    self._deselect_collection()
-                    # Also clear selection in collections list
-                    if hasattr(self, 'collections_list'):
-                        self.collections_list.clearSelection()
-                    return True
 
         # Handle mouse press on collections list (for clicks on empty space and right-clicks)
         if hasattr(self, 'collections_list') and obj == self.collections_list and event.type() == QEvent.MouseButtonPress:

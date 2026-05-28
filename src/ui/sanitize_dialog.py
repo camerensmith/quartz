@@ -234,12 +234,13 @@ class SanitizeDialog(QDialog):
         self.results_layout.addWidget(separator)
 
     def _all_fields_match(self, records: list[dict]) -> bool:
-        """Return True if all records are identical across every field (excluding id)"""
+        """Return True if all records are identical across every user field (excluding system fields)"""
+        _SYSTEM_FIELDS = {"id", "created_at", "updated_at", "record_uuid"}
         if len(records) < 2:
             return True
-        reference = {k: v for k, v in records[0].items() if k != "id"}
+        reference = {k: v for k, v in records[0].items() if k not in _SYSTEM_FIELDS}
         for record in records[1:]:
-            candidate = {k: v for k, v in record.items() if k != "id"}
+            candidate = {k: v for k, v in record.items() if k not in _SYSTEM_FIELDS}
             if candidate != reference:
                 return False
         return True
