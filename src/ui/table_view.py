@@ -943,17 +943,16 @@ class TableView(QTableView):
 
         if is_row_click:
             row = index.row()
-            # Get count of selected rows (including the clicked row if not already selected)
+            # Get count of fully-selected rows (including the clicked row if not already
+            # fully selected).  This must match what _delete_record() will actually delete,
+            # which uses selectedRows() (all columns selected).
             selection_model = self.selectionModel()
             selected_count = 0
             if selection_model:
-                selected_rows = set()
-                for idx in selection_model.selectedIndexes():
-                    selected_rows.add(idx.row())
-                # Count unique rows
-                selected_count = len(selected_rows)
-                # If clicked row is not selected, it will be added, so count it
-                if row not in selected_rows:
+                fully_selected_rows = {idx.row() for idx in selection_model.selectedRows()}
+                selected_count = len(fully_selected_rows)
+                # If clicked row is not fully selected it will be added, so count it
+                if row not in fully_selected_rows:
                     selected_count += 1
 
             # Duplicate Row option (when clicking on a row)
@@ -1209,15 +1208,14 @@ class TableView(QTableView):
             # Get current selection
             selection_model = self.selectionModel()
             if selection_model:
-                selected_rows = set()
-                for idx in selection_model.selectedIndexes():
-                    selected_rows.add(idx.row())
+                # Use selectedRows() (fully-selected rows only) so the check matches what
+                # _delete_record() requires.  selectedIndexes() includes partial cell
+                # selections, which would cause _delete_record to find no selected rows.
+                fully_selected_rows = {idx.row() for idx in selection_model.selectedRows()}
 
-                # If the clicked row is not selected, add it to selection without clearing others
-                # This allows deleting from any cell, even if the row isn't fully selected
-                if row not in selected_rows:
-                    # Add this row to selection using additive selection (like Ctrl+Click)
-                    # Select all columns in the row to ensure the entire row is selected
+                # If the clicked row is not fully selected, select all its cells now so
+                # that _delete_record() can find it via selectedRows().
+                if row not in fully_selected_rows:
                     first_col = self.model.index(row, 0)
                     last_col = self.model.index(row, self.model.columnCount() - 1)
                     row_selection = QItemSelection(first_col, last_col)
