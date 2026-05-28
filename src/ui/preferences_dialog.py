@@ -115,6 +115,15 @@ class PreferencesDialog(QDialog):
         workspace_path_layout.addWidget(browse_workspace_btn)
 
         workspace_layout.addLayout(workspace_path_layout)
+
+        cloud_hint = QLabel(
+            "💡 To sync with cloud storage, set your workspace to a folder inside "
+            "Google Drive, Dropbox, OneDrive, or any other cloud-synced location."
+        )
+        cloud_hint.setWordWrap(True)
+        cloud_hint.setStyleSheet("color: gray; font-size: 11px;")
+        workspace_layout.addWidget(cloud_hint)
+
         workspace_group.setLayout(workspace_layout)
         layout.addWidget(workspace_group)
 
