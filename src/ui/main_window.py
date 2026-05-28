@@ -519,6 +519,7 @@ class MainWindow(QMainWindow):
         # Data actions
         import_action = QAction("Import", self)
         import_action.setIcon(QIcon(str(asset_path("import.png"))))
+        import_action.setToolTip("Import into current collection data")
         import_action.triggered.connect(self._import_data)
         import_action.setEnabled(False)  # Disabled until collection selected
         self.import_action = import_action  # Store reference to enable/disable
@@ -526,6 +527,7 @@ class MainWindow(QMainWindow):
 
         export_action = QAction("Export", self)
         export_action.setIcon(QIcon(str(asset_path("export.png"))))
+        export_action.setToolTip("Export current collection data")
         export_action.triggered.connect(self._export_data)
         toolbar.addAction(export_action)
 
@@ -534,6 +536,7 @@ class MainWindow(QMainWindow):
         # Upload action (create new collection from CSV)
         upload_action = QAction("Upload", self)
         upload_action.setIcon(QIcon(str(asset_path("upload.png"))))
+        upload_action.setToolTip("Upload brand new collection")
         upload_action.triggered.connect(self._upload_data)
         toolbar.addAction(upload_action)
 
