@@ -56,6 +56,7 @@ class Config:
             "datetime_format": "yyyy-MM-dd HH:mm:ss",  # Default ISO datetime format
             "auto_check_for_updates": False,  # Auto-check for updates on startup
             "update_ignored_versions": [],  # List of versions user chose to ignore
+            "cloud_workspace_path": "",  # Optional secondary/cloud workspace path
         }
 
     def save(self):
