@@ -66,13 +66,16 @@ class SanitizeDialog(QDialog):
         options_layout.setContentsMargins(0, 8, 0, 8)
         options_layout.setSpacing(14)
 
-        self.auto_merge_check = QCheckBox(
-            "Automatically merge 1:1 matches \u2014 records that match in the selected field "
-            "and all other fields are fully merged automatically; "
-            "otherwise they are displayed for manual review"
-        )
-        self.auto_merge_check.setWordWrap(True)
+        self.auto_merge_check = QCheckBox("Automatically merge 1:1 matches")
         options_layout.addWidget(self.auto_merge_check)
+
+        auto_merge_desc = QLabel(
+            "Records that match in the selected field and all other fields are fully "
+            "merged automatically; otherwise they are displayed for manual review."
+        )
+        auto_merge_desc.setWordWrap(True)
+        auto_merge_desc.setStyleSheet("color: #777; padding: 0 0 0 22px;")
+        options_layout.addWidget(auto_merge_desc)
 
         self.strict_check = QCheckBox("Strict matching  \u2014  case and space sensitive")
         options_layout.addWidget(self.strict_check)
