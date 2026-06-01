@@ -990,17 +990,16 @@ class TableView(QTableView):
 
         if is_row_click:
             row = index.row()
-            # Get count of fully-selected rows (including the clicked row if not already
-            # fully selected).  This must match what _delete_record() will actually delete,
-            # which uses selectedRows() (all columns selected).
+            # Capture the fully-selected rows NOW (before menu.exec changes the selection).
+            # This ensures multi-row operations act on all selected rows, not just the
+            # right-clicked one.
             selection_model = self.selectionModel()
-            selected_count = 0
+            fully_selected_rows: set = set()
             if selection_model:
                 fully_selected_rows = {idx.row() for idx in selection_model.selectedRows()}
-                selected_count = len(fully_selected_rows)
-                # If clicked row is not fully selected it will be added, so count it
-                if row not in fully_selected_rows:
-                    selected_count += 1
+            # Always include the row that was right-clicked
+            fully_selected_rows.add(row)
+            selected_count = len(fully_selected_rows)
 
             # Duplicate Row option (when clicking on a row)
             duplicate_row_action = menu.addAction("Duplicate Row")
@@ -1014,9 +1013,36 @@ class TableView(QTableView):
             delete_row_action.triggered.connect(lambda: self._delete_row_via_context(row))
             menu.addSeparator()
 
-            # Add to Subcollection
+            # Add to Subcollection (uses the pre-captured row set)
             add_to_sub_action = menu.addAction("Add to Subcollection")
-            add_to_sub_action.triggered.connect(lambda: self._add_rows_to_subcollection(row))
+            captured_rows = fully_selected_rows.copy()
+            add_to_sub_action.triggered.connect(
+                lambda checked=False, rows=captured_rows: self._add_rows_to_subcollection(rows)
+            )
+
+            # "In Subcollection(s)" submenu — quick-remove from any subcollection
+            clicked_record = self.model._get_record(row)
+            clicked_record_id = clicked_record.get("id") if clicked_record else None
+            if clicked_record_id is not None:
+                main_win = self.parent()
+                while main_win and not hasattr(main_win, "_get_subcollections_for_record"):
+                    main_win = main_win.parent()
+                if main_win and hasattr(main_win, "_get_subcollections_for_record"):
+                    record_subs = main_win._get_subcollections_for_record(clicked_record_id)
+                    if record_subs:
+                        in_sub_menu = menu.addMenu("In Subcollection(s)")
+                        for sub_id, sub_name in record_subs:
+                            remove_action = in_sub_menu.addAction(f"✕  {sub_name}")
+                            remove_action.triggered.connect(
+                                lambda checked=False, sid=sub_id, rows=captured_rows, mw=main_win:
+                                mw._remove_records_from_subcollection(
+                                    [r_id for r_idx in rows
+                                     for rec in [self.model._get_record(r_idx)] if rec
+                                     for r_id in [rec.get("id")] if r_id is not None],
+                                    sid,
+                                )
+                            )
+
             menu.addSeparator()
 
         # Add Row option (always available)
@@ -1276,18 +1302,10 @@ class TableView(QTableView):
             # This will delete the row that was right-clicked, plus any other selected rows
             parent._delete_record()
 
-    def _add_rows_to_subcollection(self, clicked_row: int):
-        """Collect selected record IDs and delegate to main_window for subcollection assignment."""
-        # Build the set of record IDs to add
-        selection_model = self.selectionModel()
-        fully_selected_rows = set()
-        if selection_model:
-            fully_selected_rows = {idx.row() for idx in selection_model.selectedRows()}
-        if clicked_row not in fully_selected_rows:
-            fully_selected_rows.add(clicked_row)
-
+    def _add_rows_to_subcollection(self, row_set: set):
+        """Collect record IDs from *row_set* and delegate to main_window for subcollection assignment."""
         record_ids = []
-        for row_idx in sorted(fully_selected_rows):
+        for row_idx in sorted(row_set):
             record = self.model._get_record(row_idx)
             if record and record.get("id") is not None:
                 record_ids.append(record["id"])

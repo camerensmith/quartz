@@ -3699,6 +3699,30 @@ class MainWindow(QMainWindow):
             f"Added {len(record_ids)} record(s) to subcollection '{sub_name}'"
         )
 
+    def _get_subcollections_for_record(self, record_id) -> list:
+        """Return a list of (sub_id, sub_name) for every subcollection that contains *record_id*."""
+        if not self.current_collection:
+            return []
+        subs = self.subcollection_store.list_for_collection(self.current_collection)
+        rid = str(record_id)
+        return [(s.id, s.name) for s in subs if rid in {str(r) for r in s.record_ids}]
+
+    def _remove_records_from_subcollection(self, record_ids: list, sub_id: str):
+        """Remove *record_ids* from a subcollection and refresh the UI."""
+        if not self.current_collection or not record_ids:
+            return
+        self.subcollection_store.remove_records(self.current_collection, sub_id, record_ids)
+        self._refresh_subcollection_bar()
+        # If the active subcollection is the one being modified, re-apply the filter so the
+        # removed records disappear immediately.
+        if self.active_subcollection_id == sub_id:
+            self._on_subcollection_selected(sub_id)
+        subs = self.subcollection_store.list_for_collection(self.current_collection)
+        sub_name = next((s.name for s in subs if s.id == sub_id), sub_id)
+        self.statusBar().showMessage(
+            f"Removed {len(record_ids)} record(s) from subcollection '{sub_name}'"
+        )
+
     def eventFilter(self, obj, event):
         """Event filter to detect clicks on empty space in collections list"""
         from PySide6.QtGui import QMouseEvent
