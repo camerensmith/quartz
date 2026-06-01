@@ -1036,10 +1036,7 @@ class TableView(QTableView):
                             remove_action.triggered.connect(
                                 lambda checked=False, sid=sub_id, rows=captured_rows, mw=main_win:
                                 mw._remove_records_from_subcollection(
-                                    [r_id for r_idx in rows
-                                     for rec in [self.model._get_record(r_idx)] if rec
-                                     for r_id in [rec.get("id")] if r_id is not None],
-                                    sid,
+                                    self._record_ids_from_row_set(rows), sid
                                 )
                             )
 
@@ -1302,13 +1299,18 @@ class TableView(QTableView):
             # This will delete the row that was right-clicked, plus any other selected rows
             parent._delete_record()
 
-    def _add_rows_to_subcollection(self, row_set: set):
-        """Collect record IDs from *row_set* and delegate to main_window for subcollection assignment."""
-        record_ids = []
+    def _record_ids_from_row_set(self, row_set: set) -> list:
+        """Return the record IDs for all rows in *row_set*, skipping rows with no id."""
+        ids = []
         for row_idx in sorted(row_set):
             record = self.model._get_record(row_idx)
             if record and record.get("id") is not None:
-                record_ids.append(record["id"])
+                ids.append(record["id"])
+        return ids
+
+    def _add_rows_to_subcollection(self, row_set: set):
+        """Collect record IDs from *row_set* and delegate to main_window for subcollection assignment."""
+        record_ids = self._record_ids_from_row_set(row_set)
 
         if not record_ids:
             return
