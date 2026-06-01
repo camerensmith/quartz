@@ -1,6 +1,6 @@
 [project]
 name = "quartz"
-version = "3.0.3"
+version = "3.1.0"
 description = "Personal Database Desktop Application - A modern, extensible alternative to Symphytum"
 readme = "README.md"
 requires-python = ">=3.11"
