@@ -141,8 +141,8 @@ class SubcollectionStore:
         items = self._get_list(collection_name)
         for item in items:
             if item["id"] == sub_id:
-                existing = set(item.get("record_ids", []))
-                existing.update(record_ids)
+                existing = set(str(r) for r in item.get("record_ids", []))
+                existing.update(str(r) for r in record_ids)
                 item["record_ids"] = sorted(existing)
                 break
         self._set_list(collection_name, items)

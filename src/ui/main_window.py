@@ -1680,16 +1680,15 @@ class MainWindow(QMainWindow):
             subs = self.subcollection_store.list_for_collection(self.current_collection)
             active_sub = next((s for s in subs if s.id == self.active_subcollection_id), None)
             if active_sub is not None:
-                subcollection_ids = set(active_sub.record_ids)
+                # IDs are stored as strings; convert once here for consistent comparison
+                subcollection_ids = set(str(r) for r in active_sub.record_ids)
 
         # Get all records (either all or filtered by text search)
         if not query.strip() and not self.active_filters:
             # Show all records - no text/field filter active
             if subcollection_ids is not None:
-                # Still constrain by subcollection
-                all_records = model.records if model.records else []
-                model.filtered_records = [r for r in all_records if r.get("id") in subcollection_ids]
-                model._is_filtered = True
+                # Only subcollection constraint is active — delegate to model method
+                model.set_subcollection_filter(subcollection_ids)
             else:
                 model._is_filtered = False
                 if model._virtualized and model._total_count > 500:
@@ -1709,7 +1708,7 @@ class MainWindow(QMainWindow):
 
             # Apply subcollection constraint if active
             if subcollection_ids is not None:
-                model.filtered_records = [r for r in model.filtered_records if r.get("id") in subcollection_ids]
+                model.filtered_records = [r for r in model.filtered_records if str(r.get("id")) in subcollection_ids]
 
             # Apply active filters (AND logic - all filters must match)
             if self.active_filters:
@@ -3556,7 +3555,7 @@ class MainWindow(QMainWindow):
             target = next((s for s in subs if s.id == sub_id), None)
             if target is None:
                 return
-            record_id_set = set(target.record_ids)
+            record_id_set = set(str(r) for r in target.record_ids)
             model.set_subcollection_filter(record_id_set)
             self.statusBar().showMessage(f"Subcollection: {target.name} ({len(record_id_set)} records)")
         self._update_navigation()
@@ -3677,6 +3676,7 @@ class MainWindow(QMainWindow):
             return
 
         sub_id = selected.data(Qt.UserRole)
+        sub_name = selected.text()  # capture name before any new-sub creation
         if sub_id == "__new__":
             from PySide6.QtWidgets import QInputDialog
             name, ok = QInputDialog.getText(self, "New Subcollection", "Subcollection name:")
@@ -3688,13 +3688,13 @@ class MainWindow(QMainWindow):
             color = scheme.get("primary", "#8000FF")
             new_sub = self.subcollection_store.create(self.current_collection, name, color)
             sub_id = new_sub.id
+            sub_name = name
         self.subcollection_store.add_records(self.current_collection, sub_id, record_ids)
         # Refresh bar (record count may have changed)
         self._refresh_subcollection_bar()
         # If the active subcollection is the one just updated, re-apply filter
         if self.active_subcollection_id == sub_id:
             self._on_subcollection_selected(sub_id)
-        sub_name = next((s.name for s in subs if s.id == sub_id), sub_id)
         self.statusBar().showMessage(
             f"Added {len(record_ids)} record(s) to subcollection '{sub_name}'"
         )

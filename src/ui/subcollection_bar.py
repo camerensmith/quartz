@@ -1,5 +1,6 @@
 """Subcollection tab bar widget — sits between the top bar and the table."""
 
+import re
 import shutil
 from pathlib import Path
 
@@ -100,10 +101,15 @@ _PALETTE = [
 class ColorPickerDialog(QDialog):
     """A small colour picker with preset swatches and a hex input."""
 
+    _HEX_RE = re.compile(r'^#[0-9A-Fa-f]{6}$')
+
     def __init__(self, current_color: str = "#8000FF", parent=None):
         super().__init__(parent)
         self.setWindowTitle("Choose tab colour")
         self.setFixedWidth(280)
+        # Validate the initial color to prevent malformed CSS
+        if not self._HEX_RE.match(current_color or ""):
+            current_color = "#8000FF"
         self.chosen_color = current_color
 
         layout = QVBoxLayout(self)
@@ -268,6 +274,7 @@ class SubcollectionTab(QFrame):
         try:
             self._icon_label.setStyleSheet("background: transparent;")
         except RuntimeError:
+            # Ignore errors caused by the widget being deleted during cleanup
             pass
 
     def _refresh_icon(self):

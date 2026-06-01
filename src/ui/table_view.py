@@ -155,25 +155,31 @@ class RecordsTableModel(QAbstractTableModel):
     def set_subcollection_filter(self, record_ids: set):
         """Restrict display to records whose id is in *record_ids*.
 
+        IDs are normalised to strings internally for consistent comparison.
         The existing search / field filters will additionally narrow the result
         when applied by main_window."""
-        self._subcollection_ids = record_ids
+        self._subcollection_ids = {str(r) for r in record_ids}
         self._is_filtered = True
         self._apply_subcollection_to_display()
 
     def clear_subcollection_filter(self):
-        """Remove subcollection restriction and revert to normal display."""
+        """Remove subcollection restriction and revert to normal display.
+
+        Note: _is_filtered is only cleared if no text search query is active
+        (main_window._perform_search manages _is_filtered for text/field filters).
+        """
         self._subcollection_ids = None
-        # If no other filters remain, mark as unfiltered
-        self._is_filtered = False
         self._formatted_cache.clear()
-        # Repopulate filtered_records with all records
-        if self._virtualized and self._total_count > 500:
-            self.filtered_records = []
-        else:
-            self.filtered_records = self.records.copy() if self.records else []
+        # Only mark as fully unfiltered if there's no active search query
+        if not getattr(self, "_search_query", None):
+            self._is_filtered = False
+            if self._virtualized and self._total_count > 500:
+                self.filtered_records = []
+            else:
+                self.filtered_records = self.records.copy() if self.records else []
         self.beginResetModel()
         self.endResetModel()
+
 
     def _apply_subcollection_to_display(self):
         """Filter filtered_records (or all records) to only subcollection members."""
@@ -185,7 +191,7 @@ class RecordsTableModel(QAbstractTableModel):
             all_records = self.store.list_records() if self.store else []
         else:
             all_records = self.records if self.records else []
-        self.filtered_records = [r for r in all_records if r.get("id") in self._subcollection_ids]
+        self.filtered_records = [r for r in all_records if str(r.get("id")) in self._subcollection_ids]
         self.beginResetModel()
         self.endResetModel()
 
