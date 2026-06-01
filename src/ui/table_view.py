@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 
 from src.core.asset_store import AssetStore
 from src.core.collection_store import CollectionStore
-from src.ui.image_field import ImageDelegate, thumbnail_for_ref
+from src.ui.image_field import ImageDelegate
 from src.ui.table_delegates import FieldTypeDelegate, ValidationErrorDelegate
 
 
