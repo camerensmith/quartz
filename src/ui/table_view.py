@@ -34,7 +34,9 @@ from PySide6.QtWidgets import (
     QToolTip,
 )
 
+from src.core.asset_store import AssetStore
 from src.core.collection_store import CollectionStore
+from src.ui.image_field import ImageDelegate, thumbnail_for_ref
 from src.ui.table_delegates import FieldTypeDelegate, ValidationErrorDelegate
 
 
@@ -85,6 +87,13 @@ class CellBorderDelegate(QStyledItemDelegate):
 class RecordsTableModel(QAbstractTableModel):
     """Table model for records with virtualization support"""
 
+    # Collections with more rows than this are opened in virtualized mode:
+    # only the first batch is fetched up-front, and additional rows stream in
+    # as the user scrolls. Tiny collections (<= threshold) take the simpler
+    # full-load path because the overhead of virtualization isn't worth it
+    # below a viewport's worth of rows.
+    VIRTUALIZATION_THRESHOLD = 100
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.store: CollectionStore | None = None
@@ -109,6 +118,16 @@ class RecordsTableModel(QAbstractTableModel):
         self._formatted_cache: dict[tuple, Any] = {}  # Cache formatted values: (row, col, role) -> value
         self._filter_error: str | None = None  # Error message when filters are invalid
         self._is_filtered: bool = False  # True when a search/filter is active (even if results are empty)
+
+    def is_virtualizing(self) -> bool:
+        """Return True when the model should treat itself as virtualized.
+
+        In virtualized mode ``self.records`` and ``self.filtered_records`` are
+        intentionally empty; row data is served from ``self._record_cache``,
+        which is populated on demand by ``_load_batch`` as the user scrolls.
+        Below the threshold we keep the simpler, fully-loaded code path.
+        """
+        return self._virtualized and self._total_count > self.VIRTUALIZATION_THRESHOLD
 
     def _get_date_format(self) -> str:
         """Get date format from config"""
@@ -173,7 +192,7 @@ class RecordsTableModel(QAbstractTableModel):
         # Only mark as fully unfiltered if there's no active search query
         if not getattr(self, "_search_query", None):
             self._is_filtered = False
-            if self._virtualized and self._total_count > 500:
+            if self.is_virtualizing():
                 self.filtered_records = []
             else:
                 self.filtered_records = self.records.copy() if self.records else []
@@ -186,8 +205,10 @@ class RecordsTableModel(QAbstractTableModel):
         if self._subcollection_ids is None:
             return
         self._formatted_cache.clear()
-        if self._virtualized and self._total_count > 500:
-            # Load all records from DB so we can filter them
+        if self.is_virtualizing():
+            # Subcollection membership is sparse and unindexed in our schema, so
+            # the simplest correct behaviour is to materialise all records once
+            # and filter in Python. Initial collection load isn't affected.
             all_records = self.store.list_records() if self.store else []
         else:
             all_records = self.records if self.records else []
@@ -213,9 +234,9 @@ class RecordsTableModel(QAbstractTableModel):
         # Get total count first (fast, doesn't load records)
         self._total_count = self.store.count_records()
 
-        # Decide whether to use virtualization based on record count
-        # Use virtualization for collections with more than 500 records (lowered threshold)
-        use_virtualization = self._virtualized and self._total_count > 500
+        # Decide whether to use virtualization based on record count.
+        # See VIRTUALIZATION_THRESHOLD on the class.
+        use_virtualization = self.is_virtualizing()
 
         if use_virtualization:
             # Virtualized mode: don't load all records, just track count
@@ -224,10 +245,12 @@ class RecordsTableModel(QAbstractTableModel):
             self._record_cache.clear()
             self._loaded_batches.clear()
 
-            # Load first 2 batches immediately for initial display (better initial experience)
+            # Load only the first batch up-front. One batch is more than a
+            # viewport's worth of rows, and the scroll-driven prefetch in
+            # TableView._prefetch_visible_records will fill in further batches
+            # as needed. Cutting this from two batches to one halves the work
+            # done before the first paint.
             self._load_batch(0)
-            if self._total_count > self._batch_size:
-                self._load_batch(self._batch_size)
         else:
             # Small dataset: load all records (backward compatible)
             self.records = self.store.list_records()
@@ -311,7 +334,7 @@ class RecordsTableModel(QAbstractTableModel):
             return self._record_cache[row]
 
         # Check if we're in virtualized mode
-        if self._virtualized and self._total_count > 500:
+        if self.is_virtualizing():
             # Load the batch containing this row
             self._load_batch(row)
             return self._record_cache.get(row)
@@ -333,7 +356,7 @@ class RecordsTableModel(QAbstractTableModel):
             return len(self.filtered_records)
 
         # Otherwise, use virtualized count or regular records count
-        if self._virtualized and self._total_count > 500:
+        if self.is_virtualizing():
             # In virtualized mode, return total count
             return self._total_count
         else:
@@ -553,6 +576,21 @@ class RecordsTableModel(QAbstractTableModel):
         if self.store:
             self.store.update_record(record_id, {field_key: value})
 
+            # Image fields: keep _asset_refs in sync. Drop stale refs for this
+            # cell first, then add the new one (if any). This is idempotent
+            # whether or not the value changed.
+            if field.get("type") == "image":
+                from src.core.asset_store import AssetStore as _AssetStore
+                self.store.connect()
+                cur = self.store.conn.cursor()
+                cur.execute(
+                    "DELETE FROM _asset_refs WHERE record_id = ? AND field_key = ?",
+                    (str(record_id), field_key),
+                )
+                self.store.conn.commit()
+                if value:
+                    _AssetStore.track_ref(self.store, record_id, field_key, str(value))
+
             # Add to undo history if main window is available
             # Find main window through TableView (which is the model's parent)
             main_window = None
@@ -573,11 +611,15 @@ class RecordsTableModel(QAbstractTableModel):
                 command = RecordUpdateCommand(main_window.current_store, record_id, old_data, new_data)
                 main_window._add_to_history(command)
 
-        # Update local data - also update in main records list
+        # Update local data - also update in main records list.
+        # ``record`` is the live dict from the cache or records list, so
+        # mutating it here propagates to whichever container owns it. The
+        # branches below additionally make sure the *other* container stays
+        # in sync if the same row is referenced from it (e.g. a sort that
+        # populated both).
         record[field_key] = value
-        # Update cache if in virtualized mode
-        if self._virtualized and self._total_count > 1000:
-            # Update cached record
+        if self.is_virtualizing():
+            # Update cached record by row index (records list is empty here)
             if row in self._record_cache:
                 self._record_cache[row][field_key] = value
         else:
@@ -628,7 +670,7 @@ class RecordsTableModel(QAbstractTableModel):
         self._sort_order = order
 
         # For virtualized mode with large datasets, try database-level sorting first
-        if self._virtualized and self._total_count > 500:
+        if self.is_virtualizing():
             # Try database-level sorting for simple cases (ID column or indexed fields)
             if column == 0:
                 # Sort by ID - can use database sorting
@@ -829,7 +871,7 @@ class TableView(QTableView):
             return
 
         # Only pre-fetch in virtualized mode
-        if not (self.model._virtualized and self.model._total_count > 500):
+        if not self.model.is_virtualizing():
             return
 
         # Get visible row range
@@ -866,11 +908,29 @@ class TableView(QTableView):
         """Set the collection to display"""
         self.model.set_collection(store, fields)
         self._fields = fields  # Store fields for _get_field_for_column
+        # Resolve workspace asset store via the host main window. Used by
+        # ImageDelegate to draw thumbnails and ingest dropped/picked files.
+        asset_store: AssetStore | None = None
+        main_win = self.parent()
+        while main_win is not None and not hasattr(main_win, "workspace"):
+            main_win = main_win.parent()
+        if main_win is not None and getattr(main_win, "workspace", None):
+            asset_store = AssetStore(main_win.workspace.workspace_path)
+        self._asset_store = asset_store
+        self._collection_store = store
 
         # Set field-type-specific delegates (skip primary key column at index 0)
         self.field_delegates.clear()
         for col, field in enumerate(fields):
-            delegate = FieldTypeDelegate(field, self)
+            if field.get("type") == "image":
+                delegate = ImageDelegate(
+                    field,
+                    asset_store,
+                    lambda: self._collection_store,
+                    self,
+                )
+            else:
+                delegate = FieldTypeDelegate(field, self)
             self.setItemDelegateForColumn(col + 1, delegate)  # +1 for primary key column
             self.field_delegates[col + 1] = delegate
 
@@ -990,16 +1050,13 @@ class TableView(QTableView):
 
         if is_row_click:
             row = index.row()
-            # Capture the fully-selected rows NOW (before menu.exec changes the selection).
-            # This ensures multi-row operations act on all selected rows, not just the
-            # right-clicked one.
-            selection_model = self.selectionModel()
-            fully_selected_rows: set = set()
-            if selection_model:
-                fully_selected_rows = {idx.row() for idx in selection_model.selectedRows()}
-            # Always include the row that was right-clicked
-            fully_selected_rows.add(row)
-            selected_count = len(fully_selected_rows)
+            # Capture implicated rows NOW (before menu.exec() can change selection).
+            # Use selectedIndexes(), not selectedRows(): the table is in SelectItems
+            # mode, so users often multi-select by Ctrl+clicking one cell per row.
+            # selectedRows() only returns rows where every column is selected, which
+            # misses that common pattern and would add/delete only the right-clicked row.
+            implicated_rows = self._selected_row_indices(include_row=row)
+            selected_count = len(implicated_rows)
 
             # Duplicate Row option (when clicking on a row)
             duplicate_row_action = menu.addAction("Duplicate Row")
@@ -1015,7 +1072,7 @@ class TableView(QTableView):
 
             # Add to Subcollection (uses the pre-captured row set)
             add_to_sub_action = menu.addAction("Add to Subcollection")
-            captured_rows = fully_selected_rows.copy()
+            captured_rows = implicated_rows.copy()
             add_to_sub_action.triggered.connect(
                 lambda checked=False, rows=captured_rows: self._add_rows_to_subcollection(rows)
             )
@@ -1271,6 +1328,39 @@ class TableView(QTableView):
                 self.selectRow(row)
             parent._duplicate_record()
 
+    def _selected_row_indices(self, include_row: int | None = None) -> set[int]:
+        """Return row indices implicated by the current selection.
+
+        Any row with at least one selected cell counts. This matches how users
+        multi-select in SelectItems mode (Ctrl+click cells across rows).
+        """
+        rows: set[int] = set()
+        selection_model = self.selectionModel()
+        if selection_model:
+            rows = {idx.row() for idx in selection_model.selectedIndexes()}
+        if include_row is not None:
+            rows.add(include_row)
+        return rows
+
+    def _ensure_rows_fully_selected(self, row_set: set[int]):
+        """Expand partial row selections so selectedRows() includes every row in *row_set*."""
+        selection_model = self.selectionModel()
+        if not selection_model:
+            return
+        fully_selected = {idx.row() for idx in selection_model.selectedRows()}
+        for row in row_set:
+            if row in fully_selected:
+                continue
+            first_col = self.model.index(row, 0)
+            last_col = self.model.index(row, self.model.columnCount() - 1)
+            if not first_col.isValid() or not last_col.isValid():
+                continue
+            row_selection = QItemSelection(first_col, last_col)
+            selection_model.select(
+                row_selection,
+                QItemSelectionModel.Select | QItemSelectionModel.Rows,
+            )
+
     def _delete_row_via_context(self, row: int):
         """Delete a row via context menu - works with multiple selections and cell clicks"""
         # Find main window through parent chain
@@ -1279,24 +1369,9 @@ class TableView(QTableView):
             parent = parent.parent()
 
         if parent and hasattr(parent, "_delete_record"):
-            # Get current selection
-            selection_model = self.selectionModel()
-            if selection_model:
-                # Use selectedRows() (fully-selected rows only) so the check matches what
-                # _delete_record() requires.  selectedIndexes() includes partial cell
-                # selections, which would cause _delete_record to find no selected rows.
-                fully_selected_rows = {idx.row() for idx in selection_model.selectedRows()}
-
-                # If the clicked row is not fully selected, select all its cells now so
-                # that _delete_record() can find it via selectedRows().
-                if row not in fully_selected_rows:
-                    first_col = self.model.index(row, 0)
-                    last_col = self.model.index(row, self.model.columnCount() - 1)
-                    row_selection = QItemSelection(first_col, last_col)
-                    selection_model.select(row_selection, QItemSelectionModel.Select | QItemSelectionModel.Rows)
-
+            implicated_rows = self._selected_row_indices(include_row=row)
+            self._ensure_rows_fully_selected(implicated_rows)
             # Call delete_record which will handle all selected rows
-            # This will delete the row that was right-clicked, plus any other selected rows
             parent._delete_record()
 
     def _record_ids_from_row_set(self, row_set: set) -> list:

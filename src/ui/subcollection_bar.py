@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QMimeData, QPoint, Qt, Signal
-from PySide6.QtGui import QColor, QCursor, QDrag, QFont, QMouseEvent, QPixmap
+from PySide6.QtGui import QColor, QCursor, QDrag, QFont, QFontMetrics, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -182,6 +182,184 @@ class ColorPickerDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+# New subcollection dialog
+# ---------------------------------------------------------------------------
+
+class NewSubcollectionDialog(QDialog):
+    """Dialog for creating a new subcollection.
+
+    Lets the user enter a name (required) and optionally pick an icon and a tab
+    colour. The chosen icon path is exposed as :attr:`source_icon_path` so the
+    caller can copy it into the workspace under a stable filename derived from
+    the new subcollection's ID. Images are GUI-only and never written into the
+    collection's SQLite database; they live as files inside the user's
+    workspace folder so they survive across sessions but stay out of any data
+    export.
+    """
+
+    def __init__(self, default_color: str = "#8000FF", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("New Subcollection")
+        self.setMinimumWidth(360)
+
+        # Inherit stylesheet from parent so the dialog matches app theme
+        if parent:
+            self.setStyleSheet(parent.styleSheet())
+
+        self.chosen_color = default_color
+        self.source_icon_path: Path | None = None
+        self._name = ""
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        # --- Name row ---
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel("Name:"))
+        self._name_input = QLineEdit()
+        self._name_input.setPlaceholderText("e.g. Favorites, Archived, 2024")
+        name_row.addWidget(self._name_input, 1)
+        layout.addLayout(name_row)
+
+        # --- Icon row (optional) ---
+        icon_row = QHBoxLayout()
+        icon_row.addWidget(QLabel("Icon:"))
+        self._icon_preview = QLabel()
+        self._icon_preview.setFixedSize(28, 28)
+        self._icon_preview.setScaledContents(True)
+        self._icon_preview.setStyleSheet("border: 1px solid #ccc; border-radius: 4px;")
+        icon_row.addWidget(self._icon_preview)
+
+        self._choose_icon_btn = QPushButton("Choose icon\u2026")
+        self._choose_icon_btn.clicked.connect(self._choose_icon)
+        icon_row.addWidget(self._choose_icon_btn)
+
+        self._clear_icon_btn = QPushButton("Clear")
+        self._clear_icon_btn.setProperty("class", "secondary")
+        self._clear_icon_btn.clicked.connect(self._clear_icon)
+        self._clear_icon_btn.setEnabled(False)
+        icon_row.addWidget(self._clear_icon_btn)
+
+        icon_row.addStretch()
+        layout.addLayout(icon_row)
+
+        icon_help = QLabel(
+            "Optional. Images are stored alongside the workspace and shown "
+            "only in the app \u2014 they are not exported with database or "
+            "spreadsheet exports."
+        )
+        icon_help.setWordWrap(True)
+        icon_help.setStyleSheet("color: #777; font-size: 11px;")
+        layout.addWidget(icon_help)
+
+        # --- Color row ---
+        color_row = QHBoxLayout()
+        color_row.addWidget(QLabel("Tab colour:"))
+        self._color_swatch = QPushButton()
+        self._color_swatch.setFixedSize(28, 28)
+        self._color_swatch.clicked.connect(self._pick_color)
+        self._refresh_color_swatch()
+        color_row.addWidget(self._color_swatch)
+        color_row.addStretch()
+        layout.addLayout(color_row)
+
+        # --- Buttons ---
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btn_box.button(QDialogButtonBox.Ok).setText("Create")
+        btn_box.accepted.connect(self._on_accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+        self._refresh_icon_preview()
+        self._name_input.setFocus()
+
+    # ------------------------------------------------------------------
+    # Public accessors
+    # ------------------------------------------------------------------
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def color(self) -> str:
+        return self.chosen_color
+
+    # ------------------------------------------------------------------
+    # Icon handling
+    # ------------------------------------------------------------------
+
+    def _choose_icon(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Choose Icon", "", "Images (*.png *.jpg *.jpeg *.svg *.bmp)"
+        )
+        if not file_path:
+            return
+        # Validate it's actually decodable as an image before accepting
+        pix = QPixmap(file_path)
+        if pix.isNull():
+            QMessageBox.warning(self, "Invalid image",
+                                "That file could not be loaded as an image.")
+            return
+        self.source_icon_path = Path(file_path)
+        self._clear_icon_btn.setEnabled(True)
+        self._refresh_icon_preview()
+
+    def _clear_icon(self):
+        self.source_icon_path = None
+        self._clear_icon_btn.setEnabled(False)
+        self._refresh_icon_preview()
+
+    def _refresh_icon_preview(self):
+        from src.core.resource_path import asset_path
+        pix: QPixmap | None = None
+        if self.source_icon_path and self.source_icon_path.exists():
+            pix = QPixmap(str(self.source_icon_path))
+        if pix is None or pix.isNull():
+            default_path = asset_path("subcollection.png")
+            if default_path.exists():
+                pix = QPixmap(str(default_path))
+        if pix is not None and not pix.isNull():
+            self._icon_preview.setPixmap(
+                pix.scaled(28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
+        else:
+            self._icon_preview.clear()
+
+    # ------------------------------------------------------------------
+    # Colour handling
+    # ------------------------------------------------------------------
+
+    def _pick_color(self):
+        dlg = ColorPickerDialog(self.chosen_color, parent=self)
+        if dlg.exec() == QDialog.Accepted:
+            self.chosen_color = dlg.chosen_color
+            self._refresh_color_swatch()
+
+    def _refresh_color_swatch(self):
+        self._color_swatch.setStyleSheet(
+            f"QPushButton {{background:{self.chosen_color}; "
+            f"border:1px solid #888; border-radius:4px;}}"
+            f"QPushButton:hover {{border:2px solid #333;}}"
+        )
+
+    # ------------------------------------------------------------------
+    # Accept
+    # ------------------------------------------------------------------
+
+    def _on_accept(self):
+        name = self._name_input.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Validation",
+                                "Please enter a name for the subcollection.")
+            self._name_input.setFocus()
+            return
+        self._name = name
+        self.accept()
+
+
+# ---------------------------------------------------------------------------
 # Individual subcollection tab
 # ---------------------------------------------------------------------------
 
@@ -236,6 +414,9 @@ class SubcollectionTab(QFrame):
         if active:
             font.setBold(True)
         self._name_label.setFont(font)
+        # Reserve the bold-rendered text width regardless of current weight so
+        # toggling active state does not nudge sibling tabs to the right.
+        self._reserve_bold_width()
         layout.addWidget(self._name_label)
 
         # Inline rename editor (hidden by default)
@@ -257,12 +438,15 @@ class SubcollectionTab(QFrame):
     def _apply_style(self, hover: bool = False):
         bg = _accessible_hover(self.color) if hover else self.color
         text_color = contrasting_text_color(bg)
-        border = "2px solid rgba(0,0,0,0.3)" if self._active else "1px solid rgba(0,0,0,0.2)"
+        # Keep border thickness constant so toggling the active state never
+        # changes the tab's size hint and shifts neighbouring tabs sideways.
+        # Active vs inactive only differs in border colour/opacity.
+        border_color = "rgba(0,0,0,0.45)" if self._active else "rgba(0,0,0,0.18)"
         radius = "6px"
         self.setStyleSheet(f"""
             SubcollectionTab {{
                 background: {bg};
-                border: {border};
+                border: 2px solid {border_color};
                 border-radius: {radius};
             }}
         """)
@@ -300,7 +484,26 @@ class SubcollectionTab(QFrame):
         font.setPointSize(9)
         font.setBold(active)
         self._name_label.setFont(font)
+        # Re-reserve in case the font's bold metric changed (e.g. on first
+        # activation before fonts were fully realised).
+        self._reserve_bold_width()
         self._apply_style(hover=False)
+
+    def _reserve_bold_width(self):
+        """Lock the name label to the width its text would occupy when bold.
+
+        Keeping the slot the same width in both bold and non-bold states
+        prevents the active-tab font weight change from pushing later tabs
+        rightward.
+        """
+        bold_font = QFont(self._name_label.font())
+        bold_font.setBold(True)
+        metrics = QFontMetrics(bold_font)
+        # +2 for safety against subpixel rounding; cap at the existing 120 max.
+        text_w = metrics.horizontalAdvance(self._name_label.text()) + 2
+        text_w = min(text_w, 120)
+        self._name_label.setMinimumWidth(text_w)
+        self._name_label.setMaximumWidth(120)
 
     # ------------------------------------------------------------------
     # Hover / mouse events
@@ -380,6 +583,7 @@ class SubcollectionTab(QFrame):
         if new_name != self.sub_name:
             self.sub_name = new_name
             self._name_label.setText(new_name)
+            self._reserve_bold_width()
             self.rename_requested.emit(self.sub_id, new_name)
 
     # ------------------------------------------------------------------
@@ -494,31 +698,37 @@ class SubcollectionBar(QWidget):
         self._scroll.setWidget(self._tabs_container)
         outer_layout.addWidget(self._scroll, 1)
 
-        # "+ New" button
-        self._new_btn = QPushButton("+ New")
-        self._new_btn.setFixedHeight(32)
-        self._new_btn.setFixedWidth(60)
+        # "+" button — always visible while a collection is loaded so users
+        # can add subcollections at any time without going through a record
+        # context menu.
+        self._new_btn = QPushButton("+")
+        self._new_btn.setFixedSize(28, 28)
         self._new_btn.setToolTip("Create a new subcollection")
+        self._new_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self._new_btn.setStyleSheet("""
             QPushButton {
                 background: transparent;
                 border: 1px dashed #aaa;
-                border-radius: 6px;
-                font-size: 11px;
+                border-radius: 14px;
+                font-size: 16px;
+                font-weight: bold;
                 color: #666;
-                padding: 2px 6px;
+                padding: 0;
             }
             QPushButton:hover {
                 background: #f0f0f0;
                 border-color: #888;
                 color: #333;
             }
+            QPushButton:pressed {
+                background: #e6e6e6;
+            }
         """)
         self._new_btn.clicked.connect(self.create_requested.emit)
         outer_layout.addWidget(self._new_btn)
 
         self.setFixedHeight(54)
-        self.hide()  # Hidden until populated
+        self.hide()  # Hidden until a collection is loaded; main_window controls visibility
 
     # ------------------------------------------------------------------
     # Public interface
@@ -559,11 +769,10 @@ class SubcollectionBar(QWidget):
         self._clear_tabs()
         for sub in self._subcollections:
             self._add_tab(sub)
-
-        if self._subcollections:
-            self.show()
-        else:
-            self.hide()
+        # Visibility is controlled by the parent window (only shown in the
+        # table view when a collection is loaded). Don't auto-hide here just
+        # because the list is empty — the "+" button still needs to be
+        # reachable so users can create the first subcollection.
 
     def _add_tab(self, sub: SubcollectionInfo):
         tab = SubcollectionTab(

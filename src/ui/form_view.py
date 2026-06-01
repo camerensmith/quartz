@@ -23,7 +23,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.core.asset_store import AssetStore
 from src.core.collection_store import CollectionStore
+from src.ui.image_field import ImageFieldWidget
 
 # Use Qt's minimum supported year as the blank-form sentinel for date editors.
 EMPTY_FORM_DATE = QDate(1, 1, 1)
@@ -43,6 +45,13 @@ class FormView(QWidget):
         self.current_record_id: int | None = None
         self.field_widgets: dict[str, QWidget] = {}  # Initialize field_widgets dictionary
         self._main_window = None  # Cache reference to main window
+        self._asset_store: AssetStore | None = None
+
+        # Ordered list of widgets that participate in the form's tab cycle.
+        # Populated by ``_rebuild_form`` and consumed by ``focusNextPrevChild``
+        # so Tab/Shift+Tab cycle within the form instead of leaking out into
+        # the rest of the main window.
+        self._tab_chain: list[QWidget] = []
 
         self.layout = QVBoxLayout(self)
         self.form_layout = QFormLayout()
@@ -85,6 +94,14 @@ class FormView(QWidget):
         # Cache main window reference if not already cached
         if not self._main_window:
             self._find_main_window()
+
+        # Resolve workspace-level asset store (for image fields). If the host
+        # main window doesn't have one yet, fall back to None — image widgets
+        # gracefully no-op until bound.
+        if self._main_window and hasattr(self._main_window, "workspace") and self._main_window.workspace:
+            self._asset_store = AssetStore(self._main_window.workspace.workspace_path)
+        else:
+            self._asset_store = None
         if store is None:
             # Clear the form
             while self.form_layout.count():
@@ -139,6 +156,18 @@ class FormView(QWidget):
                 # After button, go to first form field (completes the loop)
                 self.setTabOrder(self.save_and_new_btn, first_widget)
 
+        # Rebuild the explicit tab cycle used by ``focusNextPrevChild``. Order
+        # matches the visual order of fields, with the Save and New button
+        # appended at the end so the cycle is field1 → field2 → … → fieldN →
+        # Save and New → field1.
+        self._tab_chain = [
+            self.field_widgets[f["key"]]
+            for f in self.fields
+            if f["key"] in self.field_widgets
+        ]
+        if hasattr(self, "save_and_new_btn"):
+            self._tab_chain.append(self.save_and_new_btn)
+
     def _create_field_widget(self, field: dict) -> QWidget:
         """Create a widget for a field type"""
         field_type = field["type"]
@@ -153,6 +182,11 @@ class FormView(QWidget):
             widget = QTextEdit()
             widget.setMaximumHeight(150)
             widget.setMaximumWidth(600)
+            # Without this, Tab inside a notes field inserts a literal tab
+            # character. Inside a form, users almost always want Tab to move
+            # to the next field — they can still use Ctrl+Tab if they really
+            # need a tab character.
+            widget.setTabChangesFocus(True)
             widget.textChanged.connect(self._on_field_changed)
             return widget
 
@@ -197,6 +231,11 @@ class FormView(QWidget):
             if datetime_format:
                 widget.setDisplayFormat(datetime_format)
             widget.dateTimeChanged.connect(self._on_field_changed)
+            return widget
+
+        elif field_type == "image":
+            widget = ImageFieldWidget()
+            widget.bind_stores(self._asset_store, self.store)
             return widget
 
         elif field_type in ("select", "single-select"):
@@ -248,6 +287,8 @@ class FormView(QWidget):
             return dt.toString(Qt.DateFormat.ISODate)
         elif isinstance(widget, QComboBox):
             return widget.currentText()
+        elif isinstance(widget, ImageFieldWidget):
+            return widget.value()
 
         return None
 
@@ -311,6 +352,15 @@ class FormView(QWidget):
         self._clear_validation_errors()
 
         record_id = self.store.add_record(data)
+
+        # Track image references so .qz export and future GC know what's used.
+        for field in self.fields:
+            if field.get("type") != "image":
+                continue
+            ref = data.get(field["key"])
+            if ref:
+                AssetStore.track_ref(self.store, record_id, field["key"], ref)
+
         # Keep the form in new-entry mode so form view never edits committed records.
         self.current_record_id = None
         self.record_saved.emit(record_id)
@@ -342,8 +392,68 @@ class FormView(QWidget):
             except AttributeError:
                 pass
 
-        # Don't auto-focus - let user continue working where they were
-        # The save is committed, form is cleared, ready for next entry
+        # Move focus back to the top of the form so the user can immediately
+        # start typing the next record. This is the whole point of the
+        # "Save and New" button — fast successive entry.
+        self._focus_first_field()
+
+    def focusNextPrevChild(self, next: bool) -> bool:  # noqa: A002 (Qt API name)
+        """Keep Tab / Shift+Tab navigation cycling within the form.
+
+        Without this override, Qt's focus chain is global: pressing Tab on the
+        last form widget walks out into the search bar, sidebar, toolbar, etc.
+        ``setTabOrder`` is only a hint about *relative* ordering and does not
+        close the cycle.
+
+        ``focusNextPrevChild`` is consulted by Qt before falling back to the
+        global focus chain, so by handling it here we get a self-contained
+        Tab cycle of: field1 → field2 → … → fieldN → Save and New → field1.
+        Sub-widget cases (e.g. the QLineEdit nested inside a QSpinBox) are
+        handled via ``isAncestorOf`` so the chain still works when focus is
+        deep inside a composite editor.
+        """
+        chain = self._tab_chain
+        if not chain:
+            return super().focusNextPrevChild(next)
+
+        current = self.focusWidget()
+        if current is None:
+            return super().focusNextPrevChild(next)
+
+        target_idx: int | None = None
+        for i, widget in enumerate(chain):
+            try:
+                if widget is current or widget.isAncestorOf(current):
+                    target_idx = i
+                    break
+            except RuntimeError:
+                # Widget was deleted underneath us (collection switch, etc.)
+                continue
+
+        if target_idx is None:
+            return super().focusNextPrevChild(next)
+
+        delta = 1 if next else -1
+        next_idx = (target_idx + delta) % len(chain)
+        chain[next_idx].setFocus(Qt.TabFocusReason)
+        return True
+
+    def _focus_first_field(self):
+        """Move focus to the first widget in the form's tab cycle.
+
+        Used after ``Save and New`` so the user can keep typing without
+        reaching for the mouse. Falls back gracefully if the form has no
+        fields yet (e.g. a brand-new collection).
+        """
+        if not self._tab_chain:
+            return
+        first = self._tab_chain[0]
+        first.setFocus(Qt.TabFocusReason)
+        # For text-style editors a fresh blank field is what we want; for
+        # spin/double-spin editors selectAll lets the user overtype the
+        # default value (typically 0) without backspacing first.
+        if isinstance(first, (QSpinBox, QDoubleSpinBox)):
+            first.selectAll()
 
     def _show_validation_errors(self, errors: dict[str, str]):
         """Display validation errors under fields"""
@@ -445,6 +555,8 @@ class FormView(QWidget):
                 widget.setDateTime(widget.minimumDateTime())
             elif isinstance(widget, QComboBox):
                 widget.setCurrentIndex(-1)
+            elif isinstance(widget, ImageFieldWidget):
+                widget.set_value(None)
             return
 
         # Set value (signals will fire but loading_record flag prevents auto-save)
@@ -484,6 +596,8 @@ class FormView(QWidget):
                 pass
         elif isinstance(widget, QComboBox):
             widget.setCurrentText(str(value))
+        elif isinstance(widget, ImageFieldWidget):
+            widget.set_value(str(value) if value else None)
 
     def _show_form_context_menu(self, position: QPoint):
         """Show context menu for adding fields"""
@@ -564,3 +678,5 @@ class FormView(QWidget):
                 widget.setEnabled(not readonly)
             elif isinstance(widget, QCheckBox):
                 widget.setEnabled(not readonly)
+            elif isinstance(widget, ImageFieldWidget):
+                widget.set_readonly(readonly)

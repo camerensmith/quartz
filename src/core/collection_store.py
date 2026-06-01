@@ -179,6 +179,10 @@ class CollectionStore:
         # FTS5 search index (will be created when fields are indexed)
         # This is handled dynamically
 
+        # Asset reference metadata (for image / rich-text fields)
+        from src.core.asset_store import AssetStore
+        AssetStore.ensure_collection_asset_schema(self)
+
         self.conn.commit()
 
     def add_field(self, field_key: str, field_type: str, label: str,
@@ -430,6 +434,10 @@ class CollectionStore:
         if not cursor.fetchone():
             # Schema not initialized, initialize it now
             self.initialize_schema(self.key_prefix)
+        else:
+            # Existing DB — ensure asset tables are present (idempotent migration).
+            from src.core.asset_store import AssetStore
+            AssetStore.ensure_collection_asset_schema(self)
 
     def list_fields(self) -> list[dict]:
         """List all fields"""
@@ -585,6 +593,16 @@ class CollectionStore:
         self._ensure_schema()
         self.connect()
         cursor = self.conn.cursor()
+        # Drop any asset references this record held so the FK doesn't block
+        # the delete and so future GC can reclaim orphaned bytes.
+        try:
+            cursor.execute(
+                "DELETE FROM _asset_refs WHERE record_id = ?",
+                (str(record_id),),
+            )
+        except sqlite3.OperationalError:
+            # Older DBs may not have _asset_refs yet; harmless to ignore.
+            pass
         cursor.execute("DELETE FROM records WHERE id = ?", (record_id,))
 
         # Update FTS index

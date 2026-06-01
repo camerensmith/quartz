@@ -117,10 +117,30 @@ class AddFieldDialog(QDialog):
         type_layout = QHBoxLayout()
         type_layout.addWidget(QLabel("Type:"))
         self.type_combo = QComboBox()
-        self.type_combo.addItems(["text", "notes", "integer", "decimal", "checkbox", "date", "datetime", "select"])
+        self.type_combo.addItems([
+            "text",
+            "notes",
+            "integer",
+            "decimal",
+            "checkbox",
+            "date",
+            "datetime",
+            "select",
+            "image",
+        ])
         self.type_combo.currentTextChanged.connect(self._on_type_changed)
         type_layout.addWidget(self.type_combo)
         layout.addLayout(type_layout)
+
+        self.image_type_hint = QLabel(
+            "Cells store an asset:sha256:<hex> reference. Image bytes are kept "
+            "in the workspace and only travel with .qz exports — CSV / Excel / "
+            "raw .sqlite exports include the reference, not the picture."
+        )
+        self.image_type_hint.setWordWrap(True)
+        self.image_type_hint.setStyleSheet("color: #666; font-size: 11px;")
+        self.image_type_hint.hide()
+        layout.addWidget(self.image_type_hint)
 
         # Options (for select type)
         self.options_group = QGroupBox("Select Options")
@@ -211,6 +231,10 @@ class AddFieldDialog(QDialog):
                 self._add_option()
         else:
             self.options_group.setVisible(False)
+
+        # Image field has its own hint about export behavior
+        if hasattr(self, "image_type_hint"):
+            self.image_type_hint.setVisible(field_type == "image")
 
     def _add_option(self, initial_value: str = ""):
         """Add a new option input row"""

@@ -7,6 +7,7 @@ from PySide6.QtCore import QEvent, QSize, Qt
 from PySide6.QtGui import QAction, QIcon, QKeySequence, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -655,6 +656,10 @@ class MainWindow(QMainWindow):
         export_all_action.triggered.connect(self._export_all_collections)
         file_menu.addAction(export_all_action)
 
+        export_qz_action = QAction("Export Workspace (.qz)...", self)
+        export_qz_action.triggered.connect(self._export_workspace_qz)
+        file_menu.addAction(export_qz_action)
+
         file_menu.addSeparator()
 
         delete_all_records_action = QAction("Delete All Records...", self)
@@ -688,6 +693,13 @@ class MainWindow(QMainWindow):
         visible_collection_panel_action.triggered.connect(self._toggle_collection_panel)
         self.visible_collection_panel_action = visible_collection_panel_action
         view_menu.addAction(visible_collection_panel_action)
+
+        visible_subcollections_action = QAction("Visible Subcollections", self)
+        visible_subcollections_action.setCheckable(True)
+        visible_subcollections_action.setChecked(self.config.get("visible_subcollections", True))
+        visible_subcollections_action.triggered.connect(self._toggle_visible_subcollections)
+        self.visible_subcollections_action = visible_subcollections_action
+        view_menu.addAction(visible_subcollections_action)
 
         view_menu.addSeparator()
 
@@ -1630,10 +1642,13 @@ class MainWindow(QMainWindow):
         stack_index = index + 1  # 0 -> 1 (table), 1 -> 2 (form)
         self.content_stack.setCurrentIndex(stack_index)
 
-        # Show subcollection bar only in table view
+        # Show subcollection bar in table view whenever a collection is loaded.
+        # The bar always renders the "+" button so users can add subcollections
+        # on demand, even before any exist — unless the user has hidden it via
+        # View -> Visible Subcollections.
         if hasattr(self, 'subcollection_bar'):
-            subs = self.subcollection_store.list_for_collection(self.current_collection or "")
-            if index == 0 and subs:  # Table view and has subcollections
+            visible_pref = self.config.get("visible_subcollections", True)
+            if index == 0 and self.current_collection and visible_pref:
                 self.subcollection_bar.show()
             else:
                 self.subcollection_bar.hide()
@@ -1691,7 +1706,7 @@ class MainWindow(QMainWindow):
                 model.set_subcollection_filter(subcollection_ids)
             else:
                 model._is_filtered = False
-                if model._virtualized and model._total_count > 500:
+                if model.is_virtualizing():
                     model._search_query = None
                     model._refresh_data()
                 else:
@@ -2244,8 +2259,11 @@ class MainWindow(QMainWindow):
             elif hasattr(model, '_search_query'):
                 # Clear search query if no filter was active
                 model._search_query = None
-                # Ensure filtered_records shows all records
-                if not model._virtualized or model._total_count <= 500:
+                # In non-virtualized mode the records list owns the truth, so
+                # mirror it into filtered_records. In virtualized mode that
+                # list is intentionally empty and the cache serves rowCount/
+                # data via is_virtualizing(), so leave filtered_records cleared.
+                if not model.is_virtualizing():
                     model.filtered_records = model.records.copy() if model.records else []
                 model.beginResetModel()
                 model.endResetModel()
@@ -2350,7 +2368,10 @@ class MainWindow(QMainWindow):
 
         export_service = ExportService(self.current_store)
         dialog = ExportDialog(
-            self, export_service, selected_ids if selected_ids else None
+            self,
+            export_service,
+            selected_ids if selected_ids else None,
+            workspace=self.workspace,
         )
         dialog.exec()
 
@@ -2456,6 +2477,42 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f"Field '{field_label}' deleted successfully", 3000)
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to delete field: {str(e)}")
+
+    def _export_workspace_qz(self):
+        """Export the entire workspace as a Quartz Workspace (.qz) bundle."""
+        from datetime import datetime
+
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        from src.core.qz_packager import QZ_EXTENSION, QzPackager
+
+        collections = self.workspace.list_collections()
+        if not collections:
+            QMessageBox.information(self, "Info", "No collections to export")
+            return
+
+        default_name = f"{self.workspace.workspace_path.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{QZ_EXTENSION}"
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Quartz Workspace",
+            default_name,
+            f"Quartz Workspace (*{QZ_EXTENSION});;All files (*)",
+        )
+        if not file_path:
+            return
+
+        try:
+            QzPackager(self.workspace).pack(Path(file_path))
+            QMessageBox.information(
+                self,
+                "Success",
+                f"Workspace exported to:\n{file_path}\n\n"
+                "This bundle includes all collections, icons, subcollections, "
+                "and asset bytes. Spreadsheet and raw .sqlite exports remain "
+                "data-only.",
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to export workspace: {e}")
 
     def _export_all_collections(self):
         """Export all collections as a zip file"""
@@ -2788,6 +2845,17 @@ class MainWindow(QMainWindow):
         """Toggle collection panel visibility"""
         self.config.set("visible_collection_panel", checked)
         self._apply_view_settings()
+
+    def _toggle_visible_subcollections(self, checked: bool):
+        """Toggle the subcollection tab bar above the table view."""
+        self.config.set("visible_subcollections", checked)
+        if not checked and self.active_subcollection_id is not None:
+            # Hiding the bar should also drop any active subcollection filter
+            # so the table doesn't appear stuck on a filter the user can't see.
+            self.active_subcollection_id = None
+            if hasattr(self, "table_view") and self.table_view:
+                self.table_view.model.clear_subcollection_filter()
+        self._refresh_subcollection_bar()
 
     def _toggle_show_key(self, checked: bool):
         """Toggle primary key column visibility"""
@@ -3494,7 +3562,7 @@ class MainWindow(QMainWindow):
 
         model = self.table_view.model
         # Use _total_count for virtualized collections (records list is empty in that mode)
-        total = model._total_count if (model._virtualized and model._total_count > 500) else len(model.records)
+        total = model._total_count if model.is_virtualizing() else len(model.records)
         filtered = len(model.filtered_records)
 
         if model._is_filtered:
@@ -3532,10 +3600,13 @@ class MainWindow(QMainWindow):
         if not self.current_collection or not hasattr(self, 'subcollection_bar'):
             return
         subs = self.subcollection_store.list_for_collection(self.current_collection)
-        # Only show bar in table view
+        # Show bar whenever we're viewing a collection's table — the "+" button
+        # should always be reachable, even with zero subcollections — unless the
+        # user has turned the bar off via View -> Visible Subcollections.
         is_table_view = self.content_stack.currentIndex() == 1
+        visible_pref = self.config.get("visible_subcollections", True)
         self.subcollection_bar.load(subs, self.workspace.workspace_path, self.active_subcollection_id)
-        if subs and is_table_view:
+        if is_table_view and visible_pref:
             self.subcollection_bar.show()
         else:
             self.subcollection_bar.hide()
@@ -3566,25 +3637,87 @@ class MainWindow(QMainWindow):
             return
         self.subcollection_store.set_order(self.current_collection, new_order)
 
+    def _default_subcollection_color(self) -> str:
+        """Return the default tab colour for new subcollections (current scheme primary)."""
+        from src.ui.styles import AppStyles
+        scheme = AppStyles.COLOR_SCHEMES.get(self.config.get("color_scheme", "default"), {})
+        return scheme.get("primary", "#8000FF")
+
+    def _store_subcollection_icon(self, sub_id: str, source_path: Path) -> str | None:
+        """Copy *source_path* into ``workspace/subcollection_icons/<sub_id>.png``.
+
+        Images are kept as files in the workspace so they can be shown in the
+        GUI but are intentionally never written into the SQLite database; this
+        keeps DB/spreadsheet exports clean of binary data. Returns the path
+        relative to the workspace root, or ``None`` on failure.
+        """
+        from PySide6.QtGui import QPixmap
+
+        try:
+            icons_dir = self.workspace.workspace_path / "subcollection_icons"
+            icons_dir.mkdir(exist_ok=True)
+            dest = icons_dir / f"{sub_id}.png"
+            pix = QPixmap(str(source_path))
+            if not pix.isNull():
+                scaled = pix.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                if not scaled.save(str(dest)):
+                    import shutil
+                    shutil.copy2(source_path, dest)
+            else:
+                import shutil
+                shutil.copy2(source_path, dest)
+            return str(dest.relative_to(self.workspace.workspace_path))
+        except Exception as exc:
+            QMessageBox.warning(self, "Icon", f"Failed to save subcollection icon:\n{exc}")
+            return None
+
+    def _prompt_new_subcollection(self) -> tuple[str, str, Path | None] | None:
+        """Show the NewSubcollectionDialog and return (name, color, source_icon) or None."""
+        from src.ui.subcollection_bar import NewSubcollectionDialog
+
+        dlg = NewSubcollectionDialog(
+            default_color=self._default_subcollection_color(),
+            parent=self,
+        )
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        return dlg.name, dlg.color, dlg.source_icon_path
+
+    def _create_subcollection_with_icon(self, name: str, color: str,
+                                         source_icon: Path | None):
+        """Create a subcollection, optionally saving the chosen icon, and refresh UI.
+
+        Returns the created :class:`SubcollectionInfo`.
+        """
+        new_sub = self.subcollection_store.create(self.current_collection, name, color)
+        if source_icon is not None:
+            rel = self._store_subcollection_icon(new_sub.id, source_icon)
+            if rel:
+                self.subcollection_store.set_icon(self.current_collection, new_sub.id, rel)
+        self._refresh_subcollection_bar()
+        return new_sub
+
     def _on_create_subcollection(self, name: str = "", color: str = ""):
-        """Create a new subcollection, prompting for a name if not provided."""
+        """Create a new subcollection.
+
+        If *name* is provided (e.g. by tests or programmatic callers), creates
+        directly using sensible defaults. Otherwise prompts the user with a
+        dialog that also offers an optional icon and tab colour.
+        """
         if not self.current_collection:
             return
-        from PySide6.QtWidgets import QInputDialog
-        if not name:
-            name, ok = QInputDialog.getText(self, "New Subcollection", "Subcollection name:")
-            if not ok or not name.strip():
-                return
-            name = name.strip()
-        if not color:
-            color = self.config.get("color_scheme_primary", "#8000FF")
-            # Use default scheme primary colour
-            from src.ui.styles import AppStyles
-            scheme = AppStyles.COLOR_SCHEMES.get(self.config.get("color_scheme", "default"), {})
-            color = scheme.get("primary", "#8000FF")
-        self.subcollection_store.create(self.current_collection, name, color)
-        self._refresh_subcollection_bar()
-        self.statusBar().showMessage(f"Subcollection '{name}' created")
+        if name:
+            color = color or self._default_subcollection_color()
+            self._create_subcollection_with_icon(name, color, None)
+            self.statusBar().showMessage(f"Subcollection '{name}' created")
+            return
+
+        result = self._prompt_new_subcollection()
+        if result is None:
+            return
+        new_name, new_color, source_icon = result
+        self._create_subcollection_with_icon(new_name, new_color, source_icon)
+        self.statusBar().showMessage(f"Subcollection '{new_name}' created")
 
     def _on_rename_subcollection(self, sub_id: str, new_name: str):
         """Persist a subcollection rename."""
@@ -3626,19 +3759,12 @@ class MainWindow(QMainWindow):
         subs = self.subcollection_store.list_for_collection(self.current_collection)
 
         if not subs:
-            # No subcollections yet — create one
-            from PySide6.QtWidgets import QInputDialog
-            name, ok = QInputDialog.getText(
-                self, "New Subcollection",
-                "No subcollections exist yet.\nEnter a name for a new subcollection:"
-            )
-            if not ok or not name.strip():
+            # No subcollections yet — prompt to create one (with optional icon/colour)
+            result = self._prompt_new_subcollection()
+            if result is None:
                 return
-            name = name.strip()
-            from src.ui.styles import AppStyles
-            scheme = AppStyles.COLOR_SCHEMES.get(self.config.get("color_scheme", "default"), {})
-            color = scheme.get("primary", "#8000FF")
-            new_sub = self.subcollection_store.create(self.current_collection, name, color)
+            name, color, source_icon = result
+            new_sub = self._create_subcollection_with_icon(name, color, source_icon)
             self.subcollection_store.add_records(self.current_collection, new_sub.id, record_ids)
             self._refresh_subcollection_bar()
             self.statusBar().showMessage(
@@ -3678,15 +3804,11 @@ class MainWindow(QMainWindow):
         sub_id = selected.data(Qt.UserRole)
         sub_name = selected.text()  # capture name before any new-sub creation
         if sub_id == "__new__":
-            from PySide6.QtWidgets import QInputDialog
-            name, ok = QInputDialog.getText(self, "New Subcollection", "Subcollection name:")
-            if not ok or not name.strip():
+            result = self._prompt_new_subcollection()
+            if result is None:
                 return
-            name = name.strip()
-            from src.ui.styles import AppStyles
-            scheme = AppStyles.COLOR_SCHEMES.get(self.config.get("color_scheme", "default"), {})
-            color = scheme.get("primary", "#8000FF")
-            new_sub = self.subcollection_store.create(self.current_collection, name, color)
+            name, color, source_icon = result
+            new_sub = self._create_subcollection_with_icon(name, color, source_icon)
             sub_id = new_sub.id
             sub_name = name
         self.subcollection_store.add_records(self.current_collection, sub_id, record_ids)
