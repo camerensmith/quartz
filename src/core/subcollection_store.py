@@ -149,11 +149,11 @@ class SubcollectionStore:
 
     def remove_records(self, collection_name: str, sub_id: str, record_ids: list):
         """Remove record IDs from a subcollection."""
-        to_remove = set(record_ids)
+        to_remove = {str(r) for r in record_ids}
         items = self._get_list(collection_name)
         for item in items:
             if item["id"] == sub_id:
-                item["record_ids"] = [r for r in item.get("record_ids", []) if r not in to_remove]
+                item["record_ids"] = [r for r in item.get("record_ids", []) if str(r) not in to_remove]
                 break
         self._set_list(collection_name, items)
 
