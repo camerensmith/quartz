@@ -93,6 +93,9 @@ class RecordsTableModel(QAbstractTableModel):
         self.filtered_records: list[dict] = []
         self._readonly = False  # Track readonly state
 
+        # Subcollection filter: when set, only records whose id is in this set are shown
+        self._subcollection_ids: set | None = None
+
         # Virtualization support
         self._virtualized = True  # Enable virtualization for large datasets
         self._batch_size = 200  # Load 200 records at a time (reduced for better responsiveness)
@@ -133,6 +136,7 @@ class RecordsTableModel(QAbstractTableModel):
         """Set the collection to display"""
         self.store = store
         self.fields = fields
+        self._subcollection_ids = None  # Clear subcollection filter on collection change
         if store is None:
             # Clear the model
             self.beginResetModel()
@@ -147,6 +151,49 @@ class RecordsTableModel(QAbstractTableModel):
             self._filter_error = None  # Clear filter error when collection changes
             self._is_filtered = False
             self._refresh_data()
+
+    def set_subcollection_filter(self, record_ids: set):
+        """Restrict display to records whose id is in *record_ids*.
+
+        IDs are normalised to strings internally for consistent comparison.
+        The existing search / field filters will additionally narrow the result
+        when applied by main_window."""
+        self._subcollection_ids = {str(r) for r in record_ids}
+        self._is_filtered = True
+        self._apply_subcollection_to_display()
+
+    def clear_subcollection_filter(self):
+        """Remove subcollection restriction and revert to normal display.
+
+        Note: _is_filtered is only cleared if no text search query is active
+        (main_window._perform_search manages _is_filtered for text/field filters).
+        """
+        self._subcollection_ids = None
+        self._formatted_cache.clear()
+        # Only mark as fully unfiltered if there's no active search query
+        if not getattr(self, "_search_query", None):
+            self._is_filtered = False
+            if self._virtualized and self._total_count > 500:
+                self.filtered_records = []
+            else:
+                self.filtered_records = self.records.copy() if self.records else []
+        self.beginResetModel()
+        self.endResetModel()
+
+
+    def _apply_subcollection_to_display(self):
+        """Filter filtered_records (or all records) to only subcollection members."""
+        if self._subcollection_ids is None:
+            return
+        self._formatted_cache.clear()
+        if self._virtualized and self._total_count > 500:
+            # Load all records from DB so we can filter them
+            all_records = self.store.list_records() if self.store else []
+        else:
+            all_records = self.records if self.records else []
+        self.filtered_records = [r for r in all_records if str(r.get("id")) in self._subcollection_ids]
+        self.beginResetModel()
+        self.endResetModel()
 
     def _refresh_data(self):
         """Refresh record data - uses virtualization for large datasets"""
@@ -967,6 +1014,11 @@ class TableView(QTableView):
             delete_row_action.triggered.connect(lambda: self._delete_row_via_context(row))
             menu.addSeparator()
 
+            # Add to Subcollection
+            add_to_sub_action = menu.addAction("Add to Subcollection")
+            add_to_sub_action.triggered.connect(lambda: self._add_rows_to_subcollection(row))
+            menu.addSeparator()
+
         # Add Row option (always available)
         add_row_action = menu.addAction("Add Row...")
         add_row_action.triggered.connect(self._add_row_via_context)
@@ -1223,6 +1275,32 @@ class TableView(QTableView):
             # Call delete_record which will handle all selected rows
             # This will delete the row that was right-clicked, plus any other selected rows
             parent._delete_record()
+
+    def _add_rows_to_subcollection(self, clicked_row: int):
+        """Collect selected record IDs and delegate to main_window for subcollection assignment."""
+        # Build the set of record IDs to add
+        selection_model = self.selectionModel()
+        fully_selected_rows = set()
+        if selection_model:
+            fully_selected_rows = {idx.row() for idx in selection_model.selectedRows()}
+        if clicked_row not in fully_selected_rows:
+            fully_selected_rows.add(clicked_row)
+
+        record_ids = []
+        for row_idx in sorted(fully_selected_rows):
+            record = self.model._get_record(row_idx)
+            if record and record.get("id") is not None:
+                record_ids.append(record["id"])
+
+        if not record_ids:
+            return
+
+        # Delegate to main window
+        parent = self.parent()
+        while parent and not hasattr(parent, "_add_records_to_subcollection"):
+            parent = parent.parent()
+        if parent and hasattr(parent, "_add_records_to_subcollection"):
+            parent._add_records_to_subcollection(record_ids)
 
     def _remove_field(self, field_key: str, field_label: str):
         """Remove a field from the collection"""

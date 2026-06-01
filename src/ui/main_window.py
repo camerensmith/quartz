@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from src.core.collection_store import CollectionStore
 from src.core.config import Config
 from src.core.resource_path import asset_path, get_quartz_icon_path
+from src.core.subcollection_store import SubcollectionStore
 from src.core.update_checker import UpdateCheckWorker
 from src.core.version import VERSION
 from src.core.workspace import Workspace
@@ -33,6 +34,7 @@ from src.ui.advanced_search_dialog import AdvancedSearchDialog
 from src.ui.form_view import FormView
 from src.ui.sanitize_dialog import SanitizeDialog
 from src.ui.styles import AppStyles
+from src.ui.subcollection_bar import SubcollectionBar
 from src.ui.table_view import TableView
 from src.ui.update_dialog import UpdateDialog
 from src.ui.update_progress_dialog import UpdateProgressDialog
@@ -99,6 +101,10 @@ class MainWindow(QMainWindow):
         self.workspace = Workspace(config.workspace_path)
         self.current_collection: str | None = None
         self.current_store: CollectionStore | None = None
+
+        # Subcollection state
+        self.subcollection_store = SubcollectionStore(config.workspace_path)
+        self.active_subcollection_id: str | None = None
 
         # Store filters and sorting per collection
         self.collection_filters: dict[str, str] = {}  # collection_name -> search_query
@@ -378,6 +384,17 @@ class MainWindow(QMainWindow):
         # Allow wrapping of filter chips
         self.filter_chips_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         right_layout.addWidget(self.filter_chips_container)
+
+        # Subcollection bar (below filter chips, above table)
+        self.subcollection_bar = SubcollectionBar()
+        self.subcollection_bar.subcollection_selected.connect(self._on_subcollection_selected)
+        self.subcollection_bar.tabs_reordered.connect(self._on_subcollection_tabs_reordered)
+        self.subcollection_bar.create_requested.connect(self._on_create_subcollection)
+        self.subcollection_bar.rename_requested.connect(self._on_rename_subcollection)
+        self.subcollection_bar.delete_requested.connect(self._on_delete_subcollection)
+        self.subcollection_bar.color_changed.connect(self._on_subcollection_color_changed)
+        self.subcollection_bar.icon_changed.connect(self._on_subcollection_icon_changed)
+        right_layout.addWidget(self.subcollection_bar)
 
         # Main content area - Stacked widget for Form/Table
         from PySide6.QtWidgets import QStackedWidget
@@ -1464,6 +1481,11 @@ class MainWindow(QMainWindow):
             self.current_store.close()
         self.current_store = None
         self.current_collection = None
+        self.active_subcollection_id = None
+
+        # Clear subcollection bar
+        if hasattr(self, 'subcollection_bar'):
+            self.subcollection_bar.clear()
 
         # Clear views
         self.table_view.model.set_collection(None, [])
@@ -1528,6 +1550,9 @@ class MainWindow(QMainWindow):
         self.active_filters = []
         self._update_filter_chips()
 
+        # Reset subcollection state when switching collections
+        self.active_subcollection_id = None
+
         # Update views
         fields = self.current_store.list_fields()
         self.table_view.set_collection(self.current_store, fields)
@@ -1563,6 +1588,9 @@ class MainWindow(QMainWindow):
             model.filtered_records = model.records.copy()
             model.beginResetModel()
             model.endResetModel()
+
+        # Load subcollections for this collection
+        self._refresh_subcollection_bar()
 
         # Update UI
         self.setWindowTitle(f"Quartz - {name}")
@@ -1602,6 +1630,14 @@ class MainWindow(QMainWindow):
         stack_index = index + 1  # 0 -> 1 (table), 1 -> 2 (form)
         self.content_stack.setCurrentIndex(stack_index)
 
+        # Show subcollection bar only in table view
+        if hasattr(self, 'subcollection_bar'):
+            subs = self.subcollection_store.list_for_collection(self.current_collection or "")
+            if index == 0 and subs:  # Table view and has subcollections
+                self.subcollection_bar.show()
+            else:
+                self.subcollection_bar.hide()
+
         if index == 1:  # Form view (stack index 2)
             self.form_view.new_record()
 
@@ -1638,15 +1674,28 @@ class MainWindow(QMainWindow):
             self.collection_filters: dict[str, str] = {}
         self.collection_filters[self.current_collection] = query
 
+        # Determine the base set — if a subcollection is active, restrict to its records
+        subcollection_ids: set | None = None
+        if self.active_subcollection_id and self.current_collection:
+            subs = self.subcollection_store.list_for_collection(self.current_collection)
+            active_sub = next((s for s in subs if s.id == self.active_subcollection_id), None)
+            if active_sub is not None:
+                # IDs are stored as strings; convert once here for consistent comparison
+                subcollection_ids = set(str(r) for r in active_sub.record_ids)
+
         # Get all records (either all or filtered by text search)
         if not query.strip() and not self.active_filters:
-            # Show all records - no filter active
-            model._is_filtered = False
-            if model._virtualized and model._total_count > 500:
-                model._search_query = None
-                model._refresh_data()
+            # Show all records - no text/field filter active
+            if subcollection_ids is not None:
+                # Only subcollection constraint is active — delegate to model method
+                model.set_subcollection_filter(subcollection_ids)
             else:
-                model.filtered_records = model.records.copy() if model.records else []
+                model._is_filtered = False
+                if model._virtualized and model._total_count > 500:
+                    model._search_query = None
+                    model._refresh_data()
+                else:
+                    model.filtered_records = model.records.copy() if model.records else []
         else:
             # A search or filter is active
             model._is_filtered = True
@@ -1656,6 +1705,10 @@ class MainWindow(QMainWindow):
             else:
                 # No text query, start with all records
                 model.filtered_records = model.records.copy() if model.records else []
+
+            # Apply subcollection constraint if active
+            if subcollection_ids is not None:
+                model.filtered_records = [r for r in model.filtered_records if str(r.get("id")) in subcollection_ids]
 
             # Apply active filters (AND logic - all filters must match)
             if self.active_filters:
@@ -3469,6 +3522,182 @@ class MainWindow(QMainWindow):
                         # Scroll to the selected row
                         self.table_view.scrollTo(model.index(i, 0))
                         break
+
+    # ------------------------------------------------------------------
+    # Subcollection methods
+    # ------------------------------------------------------------------
+
+    def _refresh_subcollection_bar(self):
+        """Reload the subcollection bar from the store for the current collection."""
+        if not self.current_collection or not hasattr(self, 'subcollection_bar'):
+            return
+        subs = self.subcollection_store.list_for_collection(self.current_collection)
+        # Only show bar in table view
+        is_table_view = self.content_stack.currentIndex() == 1
+        self.subcollection_bar.load(subs, self.workspace.workspace_path, self.active_subcollection_id)
+        if subs and is_table_view:
+            self.subcollection_bar.show()
+        else:
+            self.subcollection_bar.hide()
+
+    def _on_subcollection_selected(self, sub_id):
+        """Handle subcollection tab click — filter or clear filter."""
+        self.active_subcollection_id = sub_id
+        model = self.table_view.model
+        if sub_id is None:
+            model.clear_subcollection_filter()
+            self.statusBar().showMessage("Showing all records")
+        else:
+            # Find the subcollection info
+            if not self.current_collection:
+                return
+            subs = self.subcollection_store.list_for_collection(self.current_collection)
+            target = next((s for s in subs if s.id == sub_id), None)
+            if target is None:
+                return
+            record_id_set = set(str(r) for r in target.record_ids)
+            model.set_subcollection_filter(record_id_set)
+            self.statusBar().showMessage(f"Subcollection: {target.name} ({len(record_id_set)} records)")
+        self._update_navigation()
+
+    def _on_subcollection_tabs_reordered(self, new_order: list):
+        """Persist the new tab order."""
+        if not self.current_collection:
+            return
+        self.subcollection_store.set_order(self.current_collection, new_order)
+
+    def _on_create_subcollection(self, name: str = "", color: str = ""):
+        """Create a new subcollection, prompting for a name if not provided."""
+        if not self.current_collection:
+            return
+        from PySide6.QtWidgets import QInputDialog
+        if not name:
+            name, ok = QInputDialog.getText(self, "New Subcollection", "Subcollection name:")
+            if not ok or not name.strip():
+                return
+            name = name.strip()
+        if not color:
+            color = self.config.get("color_scheme_primary", "#8000FF")
+            # Use default scheme primary colour
+            from src.ui.styles import AppStyles
+            scheme = AppStyles.COLOR_SCHEMES.get(self.config.get("color_scheme", "default"), {})
+            color = scheme.get("primary", "#8000FF")
+        self.subcollection_store.create(self.current_collection, name, color)
+        self._refresh_subcollection_bar()
+        self.statusBar().showMessage(f"Subcollection '{name}' created")
+
+    def _on_rename_subcollection(self, sub_id: str, new_name: str):
+        """Persist a subcollection rename."""
+        if not self.current_collection:
+            return
+        self.subcollection_store.rename(self.current_collection, sub_id, new_name)
+
+    def _on_delete_subcollection(self, sub_id: str):
+        """Delete a subcollection and update UI."""
+        if not self.current_collection:
+            return
+        was_active = (self.active_subcollection_id == sub_id)
+        self.subcollection_store.delete(self.current_collection, sub_id)
+        if was_active:
+            self.active_subcollection_id = None
+            self.table_view.model.clear_subcollection_filter()
+            self._update_navigation()
+        self._refresh_subcollection_bar()
+
+    def _on_subcollection_color_changed(self, sub_id: str, new_color: str):
+        """Persist a colour change."""
+        if not self.current_collection:
+            return
+        self.subcollection_store.set_color(self.current_collection, sub_id, new_color)
+
+    def _on_subcollection_icon_changed(self, sub_id: str, icon_rel_path: str):
+        """Persist an icon change."""
+        if not self.current_collection:
+            return
+        self.subcollection_store.set_icon(self.current_collection, sub_id, icon_rel_path)
+
+    def _add_records_to_subcollection(self, record_ids: list):
+        """Called from TableView context menu — assign records to a subcollection.
+
+        Shows a picker dialog if subcollections exist, otherwise prompts to create one.
+        """
+        if not self.current_collection:
+            return
+        subs = self.subcollection_store.list_for_collection(self.current_collection)
+
+        if not subs:
+            # No subcollections yet — create one
+            from PySide6.QtWidgets import QInputDialog
+            name, ok = QInputDialog.getText(
+                self, "New Subcollection",
+                f"No subcollections exist yet.\nEnter a name for a new subcollection:"
+            )
+            if not ok or not name.strip():
+                return
+            name = name.strip()
+            from src.ui.styles import AppStyles
+            scheme = AppStyles.COLOR_SCHEMES.get(self.config.get("color_scheme", "default"), {})
+            color = scheme.get("primary", "#8000FF")
+            new_sub = self.subcollection_store.create(self.current_collection, name, color)
+            self.subcollection_store.add_records(self.current_collection, new_sub.id, record_ids)
+            self._refresh_subcollection_bar()
+            self.statusBar().showMessage(
+                f"Added {len(record_ids)} record(s) to new subcollection '{name}'"
+            )
+            return
+
+        # Build a picker: existing subs + "Create new…"
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QListWidget, QListWidgetItem
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Add to Subcollection")
+        dlg.setMinimumWidth(300)
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(QLabel(f"Choose a subcollection for {len(record_ids)} record(s):"))
+        list_widget = QListWidget()
+        for sub in subs:
+            item = QListWidgetItem(sub.name)
+            item.setData(Qt.UserRole, sub.id)
+            list_widget.addItem(item)
+        new_item = QListWidgetItem("＋ Create new subcollection…")
+        new_item.setData(Qt.UserRole, "__new__")
+        list_widget.addItem(new_item)
+        layout.addWidget(list_widget)
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btn_box.accepted.connect(dlg.accept)
+        btn_box.rejected.connect(dlg.reject)
+        layout.addWidget(btn_box)
+
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        selected = list_widget.currentItem()
+        if not selected:
+            return
+
+        sub_id = selected.data(Qt.UserRole)
+        sub_name = selected.text()  # capture name before any new-sub creation
+        if sub_id == "__new__":
+            from PySide6.QtWidgets import QInputDialog
+            name, ok = QInputDialog.getText(self, "New Subcollection", "Subcollection name:")
+            if not ok or not name.strip():
+                return
+            name = name.strip()
+            from src.ui.styles import AppStyles
+            scheme = AppStyles.COLOR_SCHEMES.get(self.config.get("color_scheme", "default"), {})
+            color = scheme.get("primary", "#8000FF")
+            new_sub = self.subcollection_store.create(self.current_collection, name, color)
+            sub_id = new_sub.id
+            sub_name = name
+        self.subcollection_store.add_records(self.current_collection, sub_id, record_ids)
+        # Refresh bar (record count may have changed)
+        self._refresh_subcollection_bar()
+        # If the active subcollection is the one just updated, re-apply filter
+        if self.active_subcollection_id == sub_id:
+            self._on_subcollection_selected(sub_id)
+        self.statusBar().showMessage(
+            f"Added {len(record_ids)} record(s) to subcollection '{sub_name}'"
+        )
 
     def eventFilter(self, obj, event):
         """Event filter to detect clicks on empty space in collections list"""
