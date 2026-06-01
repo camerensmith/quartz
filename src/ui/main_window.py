@@ -1681,7 +1681,7 @@ class MainWindow(QMainWindow):
             active_sub = next((s for s in subs if s.id == self.active_subcollection_id), None)
             if active_sub is not None:
                 # IDs are stored as strings; convert once here for consistent comparison
-                subcollection_ids = set(str(r) for r in active_sub.record_ids)
+                subcollection_ids = {str(r) for r in active_sub.record_ids}
 
         # Get all records (either all or filtered by text search)
         if not query.strip() and not self.active_filters:
@@ -3555,7 +3555,7 @@ class MainWindow(QMainWindow):
             target = next((s for s in subs if s.id == sub_id), None)
             if target is None:
                 return
-            record_id_set = set(str(r) for r in target.record_ids)
+            record_id_set = {str(r) for r in target.record_ids}
             model.set_subcollection_filter(record_id_set)
             self.statusBar().showMessage(f"Subcollection: {target.name} ({len(record_id_set)} records)")
         self._update_navigation()
@@ -3630,7 +3630,7 @@ class MainWindow(QMainWindow):
             from PySide6.QtWidgets import QInputDialog
             name, ok = QInputDialog.getText(
                 self, "New Subcollection",
-                f"No subcollections exist yet.\nEnter a name for a new subcollection:"
+                "No subcollections exist yet.\nEnter a name for a new subcollection:"
             )
             if not ok or not name.strip():
                 return

@@ -4,17 +4,15 @@ import re
 import shutil
 from pathlib import Path
 
-from PySide6.QtCore import QMimeData, QPoint, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QCursor, QDrag, QFont, QIcon, QMouseEvent, QPixmap
+from PySide6.QtCore import QMimeData, QPoint, Qt, Signal
+from PySide6.QtGui import QColor, QCursor, QDrag, QFont, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
-    QColorDialog,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMenu,
@@ -26,8 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.core.subcollection_store import SubcollectionInfo, SubcollectionStore
-
+from src.core.subcollection_store import SubcollectionInfo
 
 # ---------------------------------------------------------------------------
 # Accessibility / colour helpers
@@ -398,7 +395,7 @@ class SubcollectionTab(QFrame):
         icons_dir = self.workspace_path / "subcollection_icons"
         icons_dir.mkdir(exist_ok=True)
         dest = icons_dir / f"{self.sub_id}.png"
-        src = Path(file_path)
+        Path(file_path)
         # Copy and resize using Qt
         pix = QPixmap(file_path)
         if not pix.isNull():
