@@ -213,6 +213,11 @@ class ChartsDialog(QDialog):
 
     def _query_counts(self, field_key: str) -> list[tuple[str, int]]:
         """Return sorted list of (value_label, count) for a field."""
+        # Validate field_key against known chartable fields to prevent SQL injection
+        known_keys = {f["key"] for f in self.fields}
+        if field_key not in known_keys:
+            return []
+
         self.store.connect()
         cursor = self.store.conn.cursor()
 
@@ -231,15 +236,13 @@ class ChartsDialog(QDialog):
                         values = json.loads(raw)
                         if isinstance(values, list):
                             for v in values:
-                                label = str(v).strip() if v is not None else ""
-                                key = label or "(Empty)"
-                                tally[key] = tally.get(key, 0) + 1
+                                label = str(v).strip() if v is not None else "(Empty)"
+                                tally[label] = tally.get(label, 0) + 1
                         else:
-                            label = str(raw).strip() or "(Empty)"
-                            tally[label] = tally.get(label, 0) + 1
+                            # Non-list JSON is a data error for multi_select; count as empty
+                            tally["(Empty)"] = tally.get("(Empty)", 0) + 1
                     except (json.JSONDecodeError, TypeError):
-                        label = str(raw).strip() or "(Empty)"
-                        tally[label] = tally.get(label, 0) + 1
+                        tally["(Empty)"] = tally.get("(Empty)", 0) + 1
                 else:
                     tally["(Empty)"] = tally.get("(Empty)", 0) + 1
             counts = sorted(tally.items(), key=lambda x: -x[1])
@@ -251,8 +254,6 @@ class ChartsDialog(QDialog):
             counts = []
             for row in cursor.fetchall():
                 label = str(row[0]).strip() if row[0] else "(Empty)"
-                if not label:
-                    label = "(Empty)"
                 counts.append((label, row[1]))
 
         return counts
