@@ -32,6 +32,7 @@ from src.core.update_checker import UpdateCheckWorker
 from src.core.version import VERSION
 from src.core.workspace import Workspace
 from src.ui.advanced_search_dialog import AdvancedSearchDialog
+from src.ui.charts_dialog import ChartsDialog
 from src.ui.form_view import FormView
 from src.ui.sanitize_dialog import SanitizeDialog
 from src.ui.styles import AppStyles
@@ -733,6 +734,13 @@ class MainWindow(QMainWindow):
         audit_trail_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
         audit_trail_action.triggered.connect(self._show_audit_trail)
         tools_menu.addAction(audit_trail_action)
+
+        charts_action = QAction("Charts...", self)
+        charts_action.setToolTip("Visualize field value distributions as bar or pie charts")
+        charts_action.triggered.connect(self._open_charts_dialog)
+        charts_action.setEnabled(False)  # Enabled when a collection is loaded
+        self.charts_action = charts_action
+        tools_menu.addAction(charts_action)
 
         tools_menu.addSeparator()
 
@@ -1513,6 +1521,9 @@ class MainWindow(QMainWindow):
         # Disable import action (no collection selected)
         if hasattr(self, 'import_action'):
             self.import_action.setEnabled(False)
+        # Disable charts action
+        if hasattr(self, 'charts_action'):
+            self.charts_action.setEnabled(False)
         # Disable field actions
         if hasattr(self, 'add_field_action'):
             self.add_field_action.setEnabled(False)
@@ -1614,6 +1625,9 @@ class MainWindow(QMainWindow):
         # Enable import action (collection is selected)
         if hasattr(self, 'import_action'):
             self.import_action.setEnabled(True)
+        # Enable charts action
+        if hasattr(self, 'charts_action'):
+            self.charts_action.setEnabled(True)
 
         # Enable field actions
         if hasattr(self, 'add_field_action'):
@@ -2038,6 +2052,20 @@ class MainWindow(QMainWindow):
         # Refresh view in case records were merged
         if self.current_collection:
             self._perform_search()
+
+    def _open_charts_dialog(self):
+        """Open the charts dialog for the current collection"""
+        if not self.current_store:
+            QMessageBox.information(self, "Charts", "Please open a collection first.")
+            return
+        fields = self.current_store.list_fields()
+        dialog = ChartsDialog(
+            self,
+            store=self.current_store,
+            fields=fields,
+            collection_name=self.current_collection or "",
+        )
+        dialog.exec()
 
     def _open_collection_and_record(self, collection_name: str, record_id: int):
         """Open a specific collection and navigate to a specific record"""
