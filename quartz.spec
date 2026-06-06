@@ -15,6 +15,7 @@ a = Analysis(
     hiddenimports=[
         'openpyxl',  # Required for Excel file import/export
         'pandas',  # Required for search filtering
+        'PySide6.QtCharts',  # Required for charts dialog
     ],
     hookspath=[],
     hooksconfig={},
@@ -56,7 +57,6 @@ a = Analysis(
         'PySide6.QtScxml',
         'PySide6.QtStateMachine',
         'PySide6.QtTextToSpeech',
-        'PySide6.QtCharts',
         'PySide6.QtDataVisualization',
         'PySide6.QtGamepad',
         'PySide6.QtHelp',
