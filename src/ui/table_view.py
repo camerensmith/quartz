@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.core.asset_store import AssetStore
-from src.core.collection_store import CollectionStore, ROW_TAG_COLOR_KEY, ROW_TAG_NAME_KEY
+from src.core.collection_store import ROW_TAG_COLOR_KEY, ROW_TAG_NAME_KEY, CollectionStore
 from src.ui.image_field import ImageDelegate
 from src.ui.subcollection_bar import ColorPickerDialog, contrasting_text_color
 from src.ui.table_delegates import FieldTypeDelegate, ValidationErrorDelegate

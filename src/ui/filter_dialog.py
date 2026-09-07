@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from src.core.collection_store import CollectionStore, ROW_TAG_NAME_KEY
+from src.core.collection_store import ROW_TAG_NAME_KEY, CollectionStore
 
 
 class FilterDialog(QDialog):

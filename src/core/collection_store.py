@@ -7,7 +7,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-
 ROW_TAG_NAME_KEY = "__row_tag_name"
 ROW_TAG_COLOR_KEY = "__row_tag_color"
 

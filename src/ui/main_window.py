@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.core.collection_store import CollectionStore, ROW_TAG_NAME_KEY
+from src.core.collection_store import ROW_TAG_NAME_KEY, CollectionStore
 from src.core.config import Config
 from src.core.resource_path import asset_path, get_quartz_icon_path
 from src.core.subcollection_store import SubcollectionStore
