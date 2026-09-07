@@ -1,10 +1,15 @@
 """Collection database store and schema management"""
 
 import json
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+
+ROW_TAG_NAME_KEY = "__row_tag_name"
+ROW_TAG_COLOR_KEY = "__row_tag_color"
 
 
 class CollectionStore:
@@ -182,8 +187,78 @@ class CollectionStore:
         # Asset reference metadata (for image / rich-text fields)
         from src.core.asset_store import AssetStore
         AssetStore.ensure_collection_asset_schema(self)
+        self._ensure_row_tag_schema()
 
         self.conn.commit()
+
+    def _ensure_row_tag_schema(self):
+        """Ensure row tag metadata tables exist for the collection."""
+        self.connect()
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS row_tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                color TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS record_row_tags (
+                record_id TEXT PRIMARY KEY,
+                tag_id INTEGER NOT NULL,
+                assigned_at TEXT NOT NULL,
+                FOREIGN KEY(tag_id) REFERENCES row_tags(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_record_row_tags_tag_id
+            ON record_row_tags(tag_id)
+        """)
+
+    @staticmethod
+    def _normalize_row_tag_color(color: str) -> str:
+        """Return a normalized ``#RRGGBB`` colour string for row tags."""
+        text = (color or "").strip()
+        if not text.startswith("#"):
+            text = f"#{text}"
+        if not re.fullmatch(r"#[0-9A-Fa-f]{6}", text):
+            raise ValueError("Row tag colour must be a valid hex colour")
+        return text.lower()
+
+    def _attach_row_tags(self, records: list[dict]) -> list[dict]:
+        """Hydrate records with row-tag name/colour metadata."""
+        if not records:
+            return records
+
+        self._ensure_row_tag_schema()
+        record_ids = [str(record.get("id")) for record in records if record.get("id") is not None]
+        if not record_ids:
+            return records
+
+        placeholders = ", ".join("?" for _ in record_ids)
+        cursor = self.conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT rrt.record_id, rt.name, rt.color
+            FROM record_row_tags rrt
+            JOIN row_tags rt ON rt.id = rrt.tag_id
+            WHERE rrt.record_id IN ({placeholders})
+            """,
+            record_ids,
+        )
+        tag_map = {
+            str(row[0]): {ROW_TAG_NAME_KEY: row[1], ROW_TAG_COLOR_KEY: row[2]}
+            for row in cursor.fetchall()
+        }
+
+        for record in records:
+            tag_info = tag_map.get(str(record.get("id")))
+            record[ROW_TAG_NAME_KEY] = tag_info.get(ROW_TAG_NAME_KEY) if tag_info else None
+            record[ROW_TAG_COLOR_KEY] = tag_info.get(ROW_TAG_COLOR_KEY) if tag_info else None
+
+        return records
 
     def add_field(self, field_key: str, field_type: str, label: str,
                   required: bool = False, default_value: str | None = None,
@@ -438,6 +513,7 @@ class CollectionStore:
             # Existing DB — ensure asset tables are present (idempotent migration).
             from src.core.asset_store import AssetStore
             AssetStore.ensure_collection_asset_schema(self)
+            self._ensure_row_tag_schema()
 
     def list_fields(self) -> list[dict]:
         """List all fields"""
@@ -560,6 +636,91 @@ class CollectionStore:
         self.conn.commit()
         return record_id
 
+    def list_row_tags(self) -> list[dict]:
+        """List available row tags for the current collection."""
+        self._ensure_schema()
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT id, name, color, created_at, updated_at
+            FROM row_tags
+            ORDER BY lower(name), id
+        """)
+        return [
+            {
+                "id": row[0],
+                "name": row[1],
+                "color": row[2],
+                "created_at": row[3],
+                "updated_at": row[4],
+            }
+            for row in cursor.fetchall()
+        ]
+
+    def create_row_tag(self, name: str, color: str) -> dict:
+        """Create a row tag with a name and colour."""
+        self._ensure_schema()
+        tag_name = (name or "").strip()
+        if not tag_name:
+            raise ValueError("Row tag name is required")
+        tag_color = self._normalize_row_tag_color(color)
+
+        now = datetime.now().isoformat()
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                """
+                INSERT INTO row_tags (name, color, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (tag_name, tag_color, now, now),
+            )
+            self.conn.commit()
+        except sqlite3.IntegrityError as exc:
+            raise ValueError(f"Row tag '{tag_name}' already exists") from exc
+
+        return {
+            "id": cursor.lastrowid,
+            "name": tag_name,
+            "color": tag_color,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    def assign_row_tag(self, record_ids: list[int | str], tag_id: int | None):
+        """Assign a row tag to one or more records, or clear it when *tag_id* is None."""
+        self._ensure_schema()
+        normalized_ids = [str(record_id) for record_id in record_ids if record_id is not None]
+        if not normalized_ids:
+            return
+
+        cursor = self.conn.cursor()
+        if tag_id is None:
+            placeholders = ", ".join("?" for _ in normalized_ids)
+            cursor.execute(
+                f"DELETE FROM record_row_tags WHERE record_id IN ({placeholders})",
+                normalized_ids,
+            )
+            self.conn.commit()
+            return
+
+        cursor.execute("SELECT 1 FROM row_tags WHERE id = ?", (tag_id,))
+        if not cursor.fetchone():
+            raise ValueError("Selected row tag does not exist")
+
+        now = datetime.now().isoformat()
+        for record_id in normalized_ids:
+            cursor.execute(
+                """
+                INSERT INTO record_row_tags (record_id, tag_id, assigned_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(record_id) DO UPDATE SET
+                    tag_id = excluded.tag_id,
+                    assigned_at = excluded.assigned_at
+                """,
+                (record_id, tag_id, now),
+            )
+        self.conn.commit()
+
     def update_record(self, record_id: int, data: dict[str, Any]):
         """Update an existing record"""
         self._ensure_schema()
@@ -603,6 +764,7 @@ class CollectionStore:
         except sqlite3.OperationalError:
             # Older DBs may not have _asset_refs yet; harmless to ignore.
             pass
+        cursor.execute("DELETE FROM record_row_tags WHERE record_id = ?", (str(record_id),))
         cursor.execute("DELETE FROM records WHERE id = ?", (record_id,))
 
         # Update FTS index
@@ -618,7 +780,7 @@ class CollectionStore:
         cursor.execute("SELECT * FROM records WHERE id = ?", (record_id,))
         row = cursor.fetchone()
         if row:
-            return dict(row)
+            return self._attach_row_tags([dict(row)])[0]
         return None
 
     def list_records(self, limit: int | None = None, offset: int = 0, order_by: str | None = None) -> list[dict]:
@@ -635,7 +797,7 @@ class CollectionStore:
             sql += f" LIMIT {limit} OFFSET {offset}"
 
         cursor.execute(sql)
-        return [dict(row) for row in cursor.fetchall()]
+        return self._attach_row_tags([dict(row) for row in cursor.fetchall()])
 
     def count_records(self) -> int:
         """Count total records"""
@@ -679,7 +841,7 @@ class CollectionStore:
                 sql += f" LIMIT {limit}"
             try:
                 cursor.execute(sql, params)
-                results = [dict(row) for row in cursor.fetchall()]
+                results = self._attach_row_tags([dict(row) for row in cursor.fetchall()])
                 # If FTS5 query returns no results for a non-empty query,
                 # and the query looks like it should match something, try simple search
                 if not results and query and query.strip() and len(query.strip()) >= 2:
@@ -715,7 +877,7 @@ class CollectionStore:
             sql += f" LIMIT {limit}"
         try:
             cursor.execute(sql, (formatted_query,))
-            return [dict(row) for row in cursor.fetchall()]
+            return self._attach_row_tags([dict(row) for row in cursor.fetchall()])
         except Exception:
             # If FTS5 query fails (e.g., syntax error), fall back to simple search
             return self.simple_search(query, limit)
@@ -803,4 +965,4 @@ class CollectionStore:
         if limit:
             filtered = filtered[:limit]
 
-        return filtered
+        return self._attach_row_tags(filtered)

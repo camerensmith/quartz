@@ -21,11 +21,13 @@ from PySide6.QtGui import (
     QKeySequence,
     QMouseEvent,
     QPen,
+    QPixmap,
     QShortcut,
 )
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QAbstractItemView,
+    QInputDialog,
     QMenu,
     QMessageBox,
     QStyle,
@@ -35,8 +37,9 @@ from PySide6.QtWidgets import (
 )
 
 from src.core.asset_store import AssetStore
-from src.core.collection_store import CollectionStore
+from src.core.collection_store import CollectionStore, ROW_TAG_COLOR_KEY, ROW_TAG_NAME_KEY
 from src.ui.image_field import ImageDelegate
+from src.ui.subcollection_bar import ColorPickerDialog, contrasting_text_color
 from src.ui.table_delegates import FieldTypeDelegate, ValidationErrorDelegate
 
 
@@ -425,6 +428,20 @@ class RecordsTableModel(QAbstractTableModel):
             return None
 
         result = None
+        tag_color = record.get(ROW_TAG_COLOR_KEY)
+        if isinstance(tag_color, str):
+            tag_color = tag_color.strip()
+        else:
+            tag_color = None
+
+        if role == Qt.BackgroundRole and tag_color:
+            color = QColor(tag_color)
+            if color.isValid():
+                return color
+        if role == Qt.ForegroundRole and tag_color:
+            color = QColor(tag_color)
+            if color.isValid():
+                return QColor(contrasting_text_color(color.name()))
 
         # Primary key column (column 0)
         if col == 0:
@@ -1057,6 +1074,17 @@ class TableView(QTableView):
             # misses that common pattern and would add/delete only the right-clicked row.
             implicated_rows = self._selected_row_indices(include_row=row)
             selected_count = len(implicated_rows)
+            clicked_record = self.model._get_record(row)
+            clicked_tag_name = clicked_record.get(ROW_TAG_NAME_KEY) if clicked_record else None
+            clicked_tag_color = clicked_record.get(ROW_TAG_COLOR_KEY) if clicked_record else None
+
+            current_tag_action = menu.addAction(
+                f"Tag: {clicked_tag_name}" if clicked_tag_name else "Tag: None"
+            )
+            if clicked_tag_color:
+                current_tag_action.setIcon(self._row_tag_icon(clicked_tag_color))
+            current_tag_action.setEnabled(False)
+            menu.addSeparator()
 
             # Duplicate Row option (when clicking on a row)
             duplicate_row_action = menu.addAction("Duplicate Row")
@@ -1077,8 +1105,27 @@ class TableView(QTableView):
                 lambda checked=False, rows=captured_rows: self._add_rows_to_subcollection(rows)
             )
 
+            row_tag_menu = menu.addMenu("Row Tag")
+            row_tags = self.model.store.list_row_tags()
+            for tag in row_tags:
+                action = row_tag_menu.addAction(self._row_tag_icon(tag["color"]), tag["name"])
+                action.triggered.connect(
+                    lambda checked=False, rows=captured_rows, tag_id=tag["id"], tag_name=tag["name"]:
+                    self._assign_row_tag_to_rows(rows, tag_id, tag_name)
+                )
+            if row_tags:
+                row_tag_menu.addSeparator()
+            create_tag_action = row_tag_menu.addAction("Create Tag…")
+            create_tag_action.triggered.connect(
+                lambda checked=False, rows=captured_rows, color=clicked_tag_color or "#8000FF":
+                self._create_row_tag_for_rows(rows, color)
+            )
+            clear_tag_action = row_tag_menu.addAction("Clear Tag")
+            clear_tag_action.triggered.connect(
+                lambda checked=False, rows=captured_rows: self._clear_row_tag_from_rows(rows)
+            )
+
             # "In Subcollection(s)" submenu — quick-remove from any subcollection
-            clicked_record = self.model._get_record(row)
             clicked_record_id = clicked_record.get("id") if clicked_record else None
             if clicked_record_id is not None:
                 main_win = self.parent()
@@ -1396,6 +1443,77 @@ class TableView(QTableView):
             parent = parent.parent()
         if parent and hasattr(parent, "_add_records_to_subcollection"):
             parent._add_records_to_subcollection(record_ids)
+
+    def _row_tag_icon(self, color: str) -> QIcon:
+        """Create a small swatch icon for a row tag colour."""
+        pixmap = QPixmap(14, 14)
+        pixmap.fill(QColor(color))
+        return QIcon(pixmap)
+
+    def _find_main_window(self):
+        """Find the parent window that owns table-level actions."""
+        parent = self.parent()
+        while parent and not hasattr(parent, "_perform_search"):
+            parent = parent.parent()
+        return parent
+
+    def _refresh_after_row_tag_change(self, message: str):
+        """Refresh the table after a row tag mutation."""
+        self.model._refresh_data()
+        main_window = self._find_main_window()
+        if main_window and hasattr(main_window, "_perform_search"):
+            main_window._perform_search()
+            if hasattr(main_window, "statusBar"):
+                main_window.statusBar().showMessage(message)
+        else:
+            self.model._refresh_data()
+            self.viewport().update()
+
+    def _assign_row_tag_to_rows(self, row_set: set[int], tag_id: int, tag_name: str):
+        """Assign an existing row tag to the selected rows."""
+        record_ids = self._record_ids_from_row_set(row_set)
+        if not record_ids or not self.model.store:
+            return
+        try:
+            self.model.store.assign_row_tag(record_ids, tag_id)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Row Tag", str(exc))
+            return
+        noun = "row" if len(record_ids) == 1 else "rows"
+        self._refresh_after_row_tag_change(f"Assigned tag '{tag_name}' to {len(record_ids)} {noun}")
+
+    def _clear_row_tag_from_rows(self, row_set: set[int]):
+        """Clear any row tag from the selected rows."""
+        record_ids = self._record_ids_from_row_set(row_set)
+        if not record_ids or not self.model.store:
+            return
+        self.model.store.assign_row_tag(record_ids, None)
+        noun = "row" if len(record_ids) == 1 else "rows"
+        self._refresh_after_row_tag_change(f"Cleared row tag from {len(record_ids)} {noun}")
+
+    def _create_row_tag_for_rows(self, row_set: set[int], initial_color: str = "#8000FF"):
+        """Prompt for a new row tag, then assign it to the selected rows."""
+        if not self.model.store:
+            return
+
+        tag_name, ok = QInputDialog.getText(self, "Create Row Tag", "Tag name:")
+        if not ok:
+            return
+
+        tag_name = tag_name.strip()
+        if not tag_name:
+            QMessageBox.warning(self, "Row Tag", "Tag name is required.")
+            return
+
+        color_dialog = ColorPickerDialog(initial_color, self)
+        if not color_dialog.exec():
+            return
+
+        try:
+            tag = self.model.store.create_row_tag(tag_name, color_dialog.chosen_color)
+            self._assign_row_tag_to_rows(row_set, tag["id"], tag["name"])
+        except ValueError as exc:
+            QMessageBox.warning(self, "Row Tag", str(exc))
 
     def _remove_field(self, field_key: str, field_label: str):
         """Remove a field from the collection"""
