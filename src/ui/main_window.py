@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.core.collection_store import CollectionStore
+from src.core.collection_store import ROW_TAG_NAME_KEY, CollectionStore
 from src.core.config import Config
 from src.core.resource_path import asset_path, get_quartz_icon_path
 from src.core.subcollection_store import SubcollectionStore
@@ -1733,7 +1733,7 @@ class MainWindow(QMainWindow):
                 model.filtered_records = self.current_store.simple_search(query)
             else:
                 # No text query, start with all records
-                model.filtered_records = model.records.copy() if model.records else []
+                model.filtered_records = self.current_store.list_records()
 
             # Apply subcollection constraint if active
             if subcollection_ids is not None:
@@ -1772,6 +1772,8 @@ class MainWindow(QMainWindow):
 
         fields = self.current_store.list_fields()
         field_keys = {f["key"] for f in fields}
+        field_keys.add(ROW_TAG_NAME_KEY)
+        field_map = {f["key"]: f for f in fields}
 
         filtered = records
         for filter_item in self.active_filters:
@@ -1811,21 +1813,24 @@ class MainWindow(QMainWindow):
                         new_filtered.append(record)
                 else:
                     # Filter by specific field
-                    field_value = record.get(field_or_text)
-
-                    # Check if this is a checkbox/boolean field
-                    field_info = next((f for f in self.current_store.list_fields() if f["key"] == field_or_text), None)
-                    is_checkbox = field_info and field_info.get("type") == "checkbox"
-
-                    if is_checkbox:
-                        # Handle checkbox/boolean filtering
-                        if self._match_checkbox_filter(field_value, operator, value):
-                            new_filtered.append(record)
-                    else:
-                        # Regular field filtering
-                        field_str = str(field_value) if field_value is not None else ""
+                    if field_or_text == ROW_TAG_NAME_KEY:
+                        field_str = str(record.get(ROW_TAG_NAME_KEY) or "")
                         if self._match_filter(field_str, operator, value):
                             new_filtered.append(record)
+                    else:
+                        field_value = record.get(field_or_text)
+                        field_info = field_map.get(field_or_text)
+                        is_checkbox = field_info and field_info.get("type") == "checkbox"
+
+                        if is_checkbox:
+                            # Handle checkbox/boolean filtering
+                            if self._match_checkbox_filter(field_value, operator, value):
+                                new_filtered.append(record)
+                        else:
+                            # Regular field filtering
+                            field_str = str(field_value) if field_value is not None else ""
+                            if self._match_filter(field_str, operator, value):
+                                new_filtered.append(record)
 
             filtered = new_filtered
 

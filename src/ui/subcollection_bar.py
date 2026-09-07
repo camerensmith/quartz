@@ -8,6 +8,7 @@ from PySide6.QtCore import QMimeData, QPoint, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QDrag, QFont, QFontMetrics, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QColorDialog,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -102,7 +103,7 @@ class ColorPickerDialog(QDialog):
 
     def __init__(self, current_color: str = "#8000FF", parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Choose tab colour")
+        self.setWindowTitle("Choose colour")
         self.setFixedWidth(280)
         # Validate the initial color to prevent malformed CSS
         if not self._HEX_RE.match(current_color or ""):
@@ -149,6 +150,10 @@ class ColorPickerDialog(QDialog):
         layout.addLayout(hex_row)
         self._hex_input.textChanged.connect(self._on_hex_changed)
 
+        custom_btn = QPushButton("Custom…")
+        custom_btn.clicked.connect(self._pick_custom_color)
+        layout.addWidget(custom_btn)
+
         # Buttons
         btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btn_box.accepted.connect(self._accept)
@@ -164,12 +169,16 @@ class ColorPickerDialog(QDialog):
         text = text.strip()
         if not text.startswith("#"):
             text = "#" + text
-        try:
-            QColor(text)  # validate
+        color = QColor(text)
+        if color.isValid():
             self._preview.setStyleSheet(f"background:{text}; border-radius:4px;")
-            self.chosen_color = text
-        except Exception:
-            pass
+            self.chosen_color = color.name()
+
+    def _pick_custom_color(self):
+        """Open the native colour dialog for RGB selection."""
+        color = QColorDialog.getColor(QColor(self.chosen_color), self, "Choose colour")
+        if color.isValid():
+            self._pick(color.name())
 
     def _accept(self):
         # Ensure chosen_color is valid

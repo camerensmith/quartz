@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from src.core.collection_store import CollectionStore
+from src.core.collection_store import ROW_TAG_NAME_KEY, CollectionStore
 
 
 class FilterDialog(QDialog):
@@ -48,12 +48,14 @@ class FilterDialog(QDialog):
         self.field_combo = QComboBox()
         self.field_data = {}  # Store field data by key
         if self.store:
+            self.field_combo.addItem("Row Tag", ROW_TAG_NAME_KEY)
             fields = self.store.list_fields()
             for f in fields:
                 if f["key"] != "id":
                     field_label = f.get("alias", f.get("label", f["key"]))
                     self.field_combo.addItem(field_label, f["key"])  # Display label, store key
                     self.field_data[f["key"]] = f  # Store full field data
+        self.field_combo.currentIndexChanged.connect(self._on_field_changed)
         field_layout.addWidget(self.field_combo)
         self.field_group.setLayout(field_layout)
         self.field_group.setVisible(True)  # Default to field
@@ -75,7 +77,10 @@ class FilterDialog(QDialog):
         value_layout = QVBoxLayout()
         self.value_input = QLineEdit()
         self.value_input.setPlaceholderText("Enter filter value...")
+        self.row_tag_value_combo = QComboBox()
+        self.row_tag_value_combo.setVisible(False)
         value_layout.addWidget(self.value_input)
+        value_layout.addWidget(self.row_tag_value_combo)
         value_group.setLayout(value_layout)
         layout.addWidget(value_group)
 
@@ -93,16 +98,41 @@ class FilterDialog(QDialog):
         button_layout.addWidget(cancel_btn)
         button_layout.addWidget(add_btn)
         layout.addLayout(button_layout)
+        self._on_field_changed()
 
     def _on_type_changed(self, text: str):
         """Handle filter type change"""
         self.field_group.setVisible(text == "Field")
+        self._on_field_changed()
+
+    def _on_field_changed(self):
+        """Toggle the value editor based on the selected filter target."""
+        is_row_tag_field = (
+            self.type_combo.currentText() == "Field"
+            and self.field_combo.currentData() == ROW_TAG_NAME_KEY
+        )
+        self.value_input.setVisible(not is_row_tag_field)
+        self.row_tag_value_combo.setVisible(is_row_tag_field)
+        if not is_row_tag_field or not self.store:
+            return
+
+        current_text = self.row_tag_value_combo.currentText()
+        self.row_tag_value_combo.clear()
+        for tag in self.store.list_row_tags():
+            self.row_tag_value_combo.addItem(tag["name"], tag["id"])
+        if current_text:
+            index = self.row_tag_value_combo.findText(current_text)
+            if index >= 0:
+                self.row_tag_value_combo.setCurrentIndex(index)
 
     def _add_filter(self):
         """Add the filter"""
         filter_type = self.type_combo.currentText()
         operator = self.operator_combo.currentText()
-        value = self.value_input.text().strip()
+        if filter_type == "Field" and self.field_combo.currentData() == ROW_TAG_NAME_KEY:
+            value = self.row_tag_value_combo.currentText().strip()
+        else:
+            value = self.value_input.text().strip()
 
         if not value:
             return
@@ -130,4 +160,3 @@ class FilterDialog(QDialog):
     def get_filter(self) -> dict | None:
         """Get the created filter"""
         return self.filter_result
-
