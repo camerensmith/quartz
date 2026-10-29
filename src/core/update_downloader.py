@@ -1,5 +1,6 @@
 """Update downloader and installer"""
 
+import hashlib
 import os
 import sys
 import tempfile
@@ -14,18 +15,28 @@ class UpdateDownloader:
     @staticmethod
     def download_update(
         download_url: str,
-        progress_callback: Callable[[int, int], None] | None = None
+        progress_callback: Callable[[int, int], None] | None = None,
+        expected_sha256: str | None = None,
     ) -> Path:
         """
-        Download update file to temporary location.
+        Download update file to temporary location and verify its checksum.
 
         Args:
             download_url: URL to download from
             progress_callback: Optional callback(byte_count, total_bytes) for progress updates
+            expected_sha256: Hex SHA-256 the release publishes for this file
 
         Returns:
             Path to downloaded file
+
+        Raises:
+            Exception: if there's no checksum to verify against, the download fails,
+                or the file doesn't match the checksum (the file is deleted)
         """
+        # Never hand an unverified executable to the installer
+        if not expected_sha256:
+            raise Exception("This release has no checksum to verify the download against")
+
         # Create temp file for download
         temp_dir = Path(tempfile.gettempdir()) / "quartz_updates"
         temp_dir.mkdir(exist_ok=True)
@@ -49,12 +60,29 @@ class UpdateDownloader:
                 str(download_path),
                 reporthook=report_progress
             )
-            return download_path
         except Exception as e:
             # Clean up on error
             if download_path.exists():
                 download_path.unlink()
             raise Exception(f"Download failed: {e}") from e
+
+        actual_sha256 = UpdateDownloader._sha256(download_path)
+        if actual_sha256 != expected_sha256.lower():
+            download_path.unlink()
+            raise Exception(
+                "Downloaded file failed checksum verification and was deleted "
+                f"(expected {expected_sha256}, got {actual_sha256})"
+            )
+        return download_path
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        """Hex SHA-256 of a file"""
+        digest = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     @staticmethod
     def install_update(downloaded_file: Path, current_exe_path: Path | None = None) -> bool:

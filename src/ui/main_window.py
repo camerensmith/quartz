@@ -3185,12 +3185,13 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             # User chose to download - start automatic download and installation
             download_url = update_info.get('download_url')
-            if download_url:
+            sha256 = update_info.get('sha256')
+            if download_url and sha256:
                 # Show progress dialog and download/install automatically
-                progress_dialog = UpdateProgressDialog(download_url, self)
+                progress_dialog = UpdateProgressDialog(download_url, sha256, self)
                 progress_dialog.exec()
             else:
-                # Fallback to manual download if no direct URL
+                # Fallback to manual download if no direct URL, or no checksum to verify it
                 self._open_download_url(update_info)
         elif dialog.ignored:
             # User chose to ignore this version
