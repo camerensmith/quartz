@@ -1,7 +1,9 @@
 """Copies of collection databases must include changes still in the WAL file"""
 
 import sqlite3
+import sys
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -105,3 +107,40 @@ def test_qz_bundle(open_collection, tmp_path):
         zf.extract("db/Books.sqlite", tmp_path / "unpacked")
     assert not [n for n in names if n.endswith(("-wal", "-shm"))]
     assert record_names(tmp_path / "unpacked" / "db" / "Books.sqlite") == ["Dune", "Emma"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows can't rename an open database")
+def test_rename_moves_wal_file(open_collection):
+    ws, _ = open_collection
+    ws.rename_collection("Books", "Novels")
+    db = ws.workspace_path / "db" / "Novels.sqlite"
+    assert record_names(db) == ["Dune", "Emma"]
+    assert not (ws.workspace_path / "db" / "Books.sqlite-wal").exists()
+
+
+def test_rename_rolls_back_when_folder_rename_fails(open_collection, monkeypatch):
+    ws, store = open_collection
+    store.close()
+    real_rename = Path.rename
+
+    def fail_for_folder(self, target):
+        if self.name == "Books":
+            raise PermissionError("folder in use")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", fail_for_folder)
+    with pytest.raises(PermissionError):
+        ws.rename_collection("Books", "Novels")
+    assert (ws.workspace_path / "db" / "Books.sqlite").exists()
+    assert not (ws.workspace_path / "db" / "Novels.sqlite").exists()
+    assert ws.list_collections() == ["Books"]
+
+
+def test_delete_removes_leftover_wal_files(open_collection):
+    ws, store = open_collection
+    store.close()
+    db = ws.workspace_path / "db" / "Books.sqlite"
+    leftover = db.with_name("Books.sqlite-wal")
+    leftover.write_bytes(b"stale")  # as left behind by a crash
+    ws.delete_collection("Books", backup=False)
+    assert not db.exists() and not leftover.exists()

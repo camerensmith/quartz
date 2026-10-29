@@ -10,6 +10,11 @@ from src.core.json_store import read_json, write_json_atomic
 logger = logging.getLogger(__name__)
 
 
+def _sqlite_side_files(db_path: Path) -> list[Path]:
+    """WAL, shared-memory and rollback-journal files SQLite keeps next to *db_path*"""
+    return [db_path.with_name(db_path.name + suffix) for suffix in ("-wal", "-shm", "-journal")]
+
+
 @dataclass
 class CollectionInfo:
     """Metadata for a collection"""
@@ -289,18 +294,28 @@ class Workspace:
         if new_name in self.collections:
             raise ValueError(f"Collection '{new_name}' already exists")
 
-        # Rename collection directory
-        old_dir = self.workspace_path / old_name
-        new_dir = self.workspace_path / new_name
-        if old_dir.exists():
-            old_dir.rename(new_dir)
-
-        # Rename database file
+        # Rename the database first: it's the step most likely to fail (open elsewhere on Windows)
         db_folder = self.workspace_path / "db"
         old_db = db_folder / f"{old_name}.sqlite"
         new_db = db_folder / f"{new_name}.sqlite"
-        if old_db.exists():
-            old_db.rename(new_db)
+        moved: list[tuple[Path, Path]] = []
+        for old_file, new_file in [(old_db, new_db), *zip(_sqlite_side_files(old_db), _sqlite_side_files(new_db), strict=True)]:
+            # The WAL file can hold changes not yet in the .sqlite file; it must move with it
+            if old_file.exists():
+                old_file.rename(new_file)
+                moved.append((old_file, new_file))
+
+        # Rename collection directory
+        old_dir = self.workspace_path / old_name
+        new_dir = self.workspace_path / new_name
+        try:
+            if old_dir.exists():
+                old_dir.rename(new_dir)
+        except OSError:
+            # Put the database back so the files still match the registry
+            for old_file, new_file in reversed(moved):
+                new_file.rename(old_file)
+            raise
 
         # Rename icon if exists
         icons_dir = self.workspace_path / "icons"
@@ -381,6 +396,10 @@ class Workspace:
                             f"The file may be locked by another process. "
                             f"Please close any applications using this collection and try again."
                         ) from e
+
+        # A leftover WAL file would be replayed into a new collection created with this name
+        for side_file in _sqlite_side_files(db_path):
+            side_file.unlink(missing_ok=True)
 
         if icon_path.exists():
             icon_path.unlink()

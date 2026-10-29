@@ -954,17 +954,22 @@ class MainWindow(QMainWindow):
             self, "Rename Collection", "New name:", text=old_name
         )
         if ok and new_name and new_name != old_name:
+            # Close it first: its database (and WAL file) can't be renamed safely while open
+            was_current = self.current_collection == old_name
+            if was_current:
+                self._close_current_collection()
             try:
                 self.workspace.rename_collection(old_name, new_name)
-                self._load_collections()
-                # If this was the current collection, reopen it
-                if self.current_collection == old_name:
-                    items = self.collections_list.findItems(new_name, Qt.MatchExactly)
-                    if items:
-                        self.collections_list.setCurrentItem(items[0])
-                        self._open_collection(new_name)
-            except ValueError as e:
-                QMessageBox.warning(self, "Error", str(e))
+            except (ValueError, OSError) as e:
+                QMessageBox.warning(self, "Error", f"Could not rename collection:\n{e}")
+                new_name = old_name
+            self._load_collections()
+            # If this was the current collection, reopen it
+            if was_current:
+                items = self.collections_list.findItems(new_name, Qt.MatchExactly)
+                if items:
+                    self.collections_list.setCurrentItem(items[0])
+                    self._open_collection(new_name)
 
     def _duplicate_collection(self, name: str):
         """Duplicate a collection"""
@@ -1456,6 +1461,19 @@ class MainWindow(QMainWindow):
             return
         self._delete_collection(current_item.text())
 
+    def _close_current_collection(self):
+        """Close the open collection's database so its files can be moved or deleted"""
+        if self.current_store:
+            self.current_store.close()
+            # Force garbage collection to release file handle
+            import gc
+            gc.collect()
+        self.current_store = None
+        self.current_collection = None
+        # Clear the table and form views
+        self.table_view.set_collection(None, [])
+        self.form_view.set_collection(None, [])
+
     def _delete_collection(self, name: str):
         """Delete a collection"""
         reply = QMessageBox.question(
@@ -1468,16 +1486,7 @@ class MainWindow(QMainWindow):
             try:
                 # Close if this is the current collection
                 if self.current_collection == name:
-                    if self.current_store:
-                        self.current_store.close()
-                        # Force garbage collection to release file handle
-                        import gc
-                        gc.collect()
-                    self.current_store = None
-                    self.current_collection = None
-                    # Clear the table and form views
-                    self.table_view.set_collection(None, [])
-                    self.form_view.set_collection(None, [])
+                    self._close_current_collection()
 
                 # Check if backup is enabled in settings
                 from src.core.config import Config
