@@ -225,8 +225,12 @@ class Workspace:
         # Initialize database schema
         from src.core.collection_store import CollectionStore
         store = CollectionStore(db_path)
-        # Pass key_prefix to initialize schema if provided
-        store.initialize_schema(key_prefix=key_prefix)
+        try:
+            # Pass key_prefix to initialize schema if provided
+            store.initialize_schema(key_prefix=key_prefix)
+        finally:
+            # Release the file now: on Windows an open database can't be renamed or deleted
+            store.close()
 
         # Register collection
         from datetime import datetime

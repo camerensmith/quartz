@@ -131,10 +131,10 @@ def _run_replace_script(tmp_path, lock_seconds, attempts):
     marker = tmp_path / "marker.txt"
     # .cmd files stand in for the executables so "starting" them leaves a trace
     current = tmp_path / "Quartz.cmd"
-    current.write_text(f'@echo off\r\necho old> "{marker}"\r\n', newline="")
+    current.write_text(f'@echo off\r\necho old> "{marker}"\r\nexit\r\n', newline="")
     new = tmp_path / "quartz_updates" / "Quartz-windows-9.9.9.cmd"
     new.parent.mkdir()
-    new.write_text(f'@echo off\r\necho new> "{marker}"\r\n', newline="")
+    new.write_text(f'@echo off\r\necho new> "{marker}"\r\nexit\r\n', newline="")
 
     # A running exe can't be replaced; an open file handle has the same effect
     locker = subprocess.Popen(
