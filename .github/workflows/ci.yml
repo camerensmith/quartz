@@ -24,7 +24,23 @@ jobs:
       - name: Install ruff
         run: pip install "ruff>=0.1.0"
       - name: Run ruff
-        run: ruff check src/ main.py
+        run: ruff check src/ main.py tests/
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install test dependencies
+        run: pip install "pytest>=7.4.0" "pytest-cov>=4.1.0"
+      - name: Run tests
+        run: pytest
 
   build-check:
     name: PyInstaller Build Check (Windows)

@@ -633,11 +633,13 @@ class CollectionPropertiesDialog(QDialog):
                 pass
 
         # Update existing fields
+        index_changed = False
         for field in updated_fields:
             existing = existing_fields.get(field["key"])
             if existing:
                 required_changed = existing["required"] != field["required"]
                 indexed_changed = existing["indexed"] != field["indexed"]
+                index_changed = index_changed or indexed_changed
                 # Update options for select fields when they have changed
                 existing_options = existing.get("options") or []
                 new_options = field.get("options") or []
@@ -660,6 +662,14 @@ class CollectionPropertiesDialog(QDialog):
                         ),
                     )
                     self.store.conn.commit()
+
+        # Record writes keep the search index in sync, but a new set of indexed fields needs a rebuild
+        if index_changed:
+            try:
+                self.store.update_fts_index()
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Failed to rebuild search index: {str(e)}")
+                return
 
         # Remove deleted fields
         deleted_keys = existing_keys - keys_in_table

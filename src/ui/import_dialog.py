@@ -19,6 +19,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from src.core.field_keys import sanitize_field_key
+from src.ui.add_field_dialog import _generate_unique_field_key
+
 # pandas removed - using csv module and openpyxl directly
 
 
@@ -390,10 +393,9 @@ class ImportDialog(QDialog):
                 # If "create new fields" is checked, still create fields for ignored columns
                 if self.create_fields_check.isChecked():
                     # Create new field for this column
-                    field_key = csv_col.lower().replace(" ", "_").replace("-", "_")
-                    field_key = "".join(c for c in field_key if c.isalnum() or c == "_")
-                    if not field_key or field_key[0].isdigit():
-                        field_key = f"field_{field_key}" if field_key else f"field_{len(new_fields_to_create)}"
+                    field_key = sanitize_field_key(csv_col)
+                    existing_fields = self.fields + [{"key": f["key"]} for f in new_fields_to_create]
+                    field_key = _generate_unique_field_key(field_key, existing_fields)
                     new_fields_to_create.append({
                         "key": field_key,
                         "label": csv_col,
@@ -409,15 +411,10 @@ class ImportDialog(QDialog):
                 mapping[csv_col] = field["key"]
             elif self.create_fields_check.isChecked():
                 # Create new field
-                field_key = csv_col.lower().replace(" ", "_").replace("-", "_")
-                field_key = "".join(c for c in field_key if c.isalnum() or c == "_")
-                if not field_key or field_key[0].isdigit():
-                    field_key = f"field_{field_key}" if field_key else f"field_{len(new_fields_to_create)}"
+                field_key = sanitize_field_key(csv_col)
 
                 # Generate unique key - check against existing fields and already-created new fields
-                existing_fields = self.fields.copy()
-                existing_fields.extend([{"key": f["key"]} for f in new_fields_to_create])
-                from src.ui.add_field_dialog import _generate_unique_field_key
+                existing_fields = self.fields + [{"key": f["key"]} for f in new_fields_to_create]
                 field_key = _generate_unique_field_key(field_key, existing_fields)
 
                 new_fields_to_create.append({

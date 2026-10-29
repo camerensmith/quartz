@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from src.core.field_keys import field_key_error, sanitize_field_key
+
 
 class NewCollectionDialog(QDialog):
     """Dialog for creating a new collection"""
@@ -145,11 +147,8 @@ class NewCollectionDialog(QDialog):
 
         if label_item and key_item:
             label = label_item.text()
-            # Convert to snake_case
-            key = label.lower().replace(" ", "").replace("-", "")
-            # Remove special characters
-            key = "".join(c for c in key if c.isalnum() or c == "_")
-            if key and not key[0].isdigit():
+            if label.strip():
+                key = sanitize_field_key(label)
                 # Get existing fields from table to check for conflicts
                 existing_fields = []
                 for r in range(self.fields_table.rowCount()):
@@ -197,8 +196,12 @@ class NewCollectionDialog(QDialog):
             if not key:
                 QMessageBox.warning(self, "Validation", f"Field '{label}' needs a key. It will be auto-generated.")
                 # Auto-generate
-                key = label.lower().replace(" ", "").replace("-", "")
-                key = "".join(c for c in key if c.isalnum() or c == "_")
+                key = sanitize_field_key(label)
+
+            error = field_key_error(key)
+            if error:
+                QMessageBox.warning(self, "Validation", f"Field '{label}': {error}")
+                return
 
             field_type = type_widget.currentText() if type_widget else "text"
             required = required_item.checkState() == Qt.Checked if required_item else False

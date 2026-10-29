@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.core.field_keys import field_key_error, sanitize_field_key
+
 
 def _generate_unique_field_key(base_key: str, existing_fields: list) -> str:
     """
@@ -29,31 +31,35 @@ def _generate_unique_field_key(base_key: str, existing_fields: list) -> str:
     Returns:
         A unique key (e.g., "r", "re", "ra", "r1", etc.)
     """
-    existing_keys = {f["key"] for f in existing_fields} if existing_fields else set()
+    # SQLite column names are case-insensitive
+    existing_keys = {f["key"].lower() for f in existing_fields} if existing_fields else set()
+
+    def available(candidate: str) -> bool:
+        return candidate.lower() not in existing_keys and field_key_error(candidate) is None
 
     # If base key is unique, return it
-    if base_key not in existing_keys:
+    if base_key.lower() not in existing_keys:
         return base_key
 
     # Try appending characters from the original label
     # First, try single characters (a-z, 0-9)
     for char in "abcdefghijklmnopqrstuvwxyz0123456789":
         candidate = base_key + char
-        if candidate not in existing_keys:
+        if available(candidate):
             return candidate
 
     # If still not unique, try two characters
     for char1 in "abcdefghijklmnopqrstuvwxyz0123456789":
         for char2 in "abcdefghijklmnopqrstuvwxyz0123456789":
             candidate = base_key + char1 + char2
-            if candidate not in existing_keys:
+            if available(candidate):
                 return candidate
 
     # Last resort: append number
     counter = 1
     while True:
         candidate = f"{base_key}{counter}"
-        if candidate not in existing_keys:
+        if available(candidate):
             return candidate
         counter += 1
         if counter > 1000:  # Safety limit
@@ -213,9 +219,8 @@ class AddFieldDialog(QDialog):
     def _on_label_changed(self, text: str):
         """Auto-generate key from label"""
         if not self.key_input.text():  # Only auto-generate if key is empty
-            key = text.lower().replace(" ", "_").replace("-", "_")
-            key = "".join(c for c in key if c.isalnum() or c == "_")
-            if key and not key[0].isdigit():
+            if text.strip():
+                key = sanitize_field_key(text)
                 # Make key unique if existing fields are provided
                 if self.existing_fields:
                     key = _generate_unique_field_key(key, self.existing_fields)
@@ -324,10 +329,7 @@ class AddFieldDialog(QDialog):
         key = self.key_input.text().strip()
         if not key:
             # Auto-generate from label
-            key = label.lower().replace(" ", "_").replace("-", "_")
-            key = "".join(c for c in key if c.isalnum() or c == "_")
-            if not key or key[0].isdigit():
-                key = f"field_{key}" if key else "field_1"
+            key = sanitize_field_key(label)
 
         # Make key unique if existing fields are provided
         if self.existing_fields:
@@ -336,8 +338,9 @@ class AddFieldDialog(QDialog):
             self.key_input.setText(key)
 
         # Validate key format
-        if not key[0].isalpha() and key[0] != "_":
-            QMessageBox.warning(self, "Validation", "Field key must start with a letter or underscore")
+        error = field_key_error(key)
+        if error:
+            QMessageBox.warning(self, "Validation", error)
             return
 
         field_type = self.type_combo.currentText()

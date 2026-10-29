@@ -26,11 +26,13 @@ from PySide6.QtWidgets import (
 
 from src.core.collection_store import ROW_TAG_NAME_KEY, CollectionStore
 from src.core.config import Config
+from src.core.field_keys import sanitize_field_key
 from src.core.resource_path import asset_path, get_quartz_icon_path
 from src.core.subcollection_store import SubcollectionStore
 from src.core.update_checker import UpdateCheckWorker
 from src.core.version import VERSION
 from src.core.workspace import Workspace
+from src.ui.add_field_dialog import _generate_unique_field_key
 from src.ui.advanced_search_dialog import AdvancedSearchDialog
 from src.ui.charts_dialog import ChartsDialog
 from src.ui.form_view import FormView
@@ -2123,7 +2125,6 @@ class MainWindow(QMainWindow):
 
                     for field in fields:
                         # Generate unique key if needed
-                        from src.ui.add_field_dialog import _generate_unique_field_key
                         field_key = _generate_unique_field_key(field["key"], existing_fields)
 
                         # Only add if it doesn't already exist
@@ -2689,10 +2690,7 @@ class MainWindow(QMainWindow):
             fields_created = []
             for header in csv_headers:
                 # Generate field key from header
-                field_key = header.lower().replace(" ", "_").replace("-", "_")
-                field_key = "".join(c for c in field_key if c.isalnum() or c == "_")
-                if not field_key or field_key[0].isdigit():
-                    field_key = f"field_{field_key}" if field_key else f"field_{len(fields_created)}"
+                field_key = _generate_unique_field_key(sanitize_field_key(header), fields_created)
 
                 # Add field
                 store.add_field(

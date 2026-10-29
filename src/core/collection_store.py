@@ -1,11 +1,18 @@
 """Collection database store and schema management"""
 
 import json
+import logging
 import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from src.core.field_keys import field_key_error
+
+logger = logging.getLogger(__name__)
+
+FTS_TRIGGERS = ("records_fts_ai", "records_fts_ad", "records_fts_au")
 
 ROW_TAG_NAME_KEY = "__row_tag_name"
 ROW_TAG_COLOR_KEY = "__row_tag_color"
@@ -18,6 +25,7 @@ class CollectionStore:
         self.db_path = Path(db_path)
         self.conn: sqlite3.Connection | None = None
         self.key_prefix: str | None = None  # Prefix for record IDs (e.g., "REST" -> "REST_1")
+        self._fts_checked = False  # Whether this connection has verified the FTS index is trigger-maintained
 
     def connect(self):
         """Open database connection"""
@@ -49,6 +57,7 @@ class CollectionStore:
                 # Close the connection
                 self.conn.close()
                 self.conn = None
+                self._fts_checked = False
 
     def __enter__(self):
         self.connect()
@@ -264,9 +273,17 @@ class CollectionStore:
                   validation_rules: dict | None = None,
                   options: list | None = None, indexed: bool = False):
         """Add a new field to the schema"""
+        error = field_key_error(field_key)
+        if error:
+            raise ValueError(error)
+
         self.connect()
         cursor = self.conn.cursor()
         now = datetime.now().isoformat()
+
+        cursor.execute("PRAGMA table_info(records)")
+        if field_key.lower() in {col[1].lower() for col in cursor.fetchall()}:
+            raise ValueError(f"Field '{field_key}' already exists")
 
         # Get the next order value (highest order + 1)
         cursor.execute("SELECT MAX(field_order) FROM fields")
@@ -278,6 +295,26 @@ class CollectionStore:
         columns = [col[1] for col in cursor.fetchall()]
         has_order = 'field_order' in columns
 
+        try:
+            self._insert_field_row(cursor, field_key, field_type, label, required, default_value,
+                                   validation_rules, options, indexed, has_order, next_order, now)
+            # Add column to records table
+            cursor.execute(f"ALTER TABLE records ADD COLUMN {field_key} TEXT")
+        except sqlite3.Error:
+            # Don't leave a fields row without its column for the next commit to persist
+            self.conn.rollback()
+            raise
+
+        # If indexed, add to FTS5 index
+        if indexed:
+            self.update_fts_index()
+
+        self.conn.commit()
+
+    @staticmethod
+    def _insert_field_row(cursor, field_key, field_type, label, required, default_value,
+                          validation_rules, options, indexed, has_order, next_order, now):
+        """Insert a field definition row (column added separately by add_field)"""
         if has_order:
             cursor.execute("""
                 INSERT INTO fields (field_key, field_type, label, required, default_value,
@@ -304,15 +341,6 @@ class CollectionStore:
                 1 if indexed else 0,
                 now, now
             ))
-
-        # Add column to records table
-        cursor.execute(f"ALTER TABLE records ADD COLUMN {field_key} TEXT")
-
-        # If indexed, add to FTS5 index
-        if indexed:
-            self.update_fts_index()
-
-        self.conn.commit()
 
     def set_field_order(self, field_key: str, new_order: int):
         """Update the display order of a field"""
@@ -376,6 +404,11 @@ class CollectionStore:
         cursor.execute("PRAGMA table_info(records)")
         table_columns = [col[1] for col in cursor.fetchall()]
         column_exists = field_key in table_columns
+
+        # FTS triggers reference indexed columns, which blocks DROP COLUMN; rebuilt below
+        if was_indexed:
+            self._drop_fts()
+        table_recreated = False
 
         # Try to drop the column from records table if it exists
         # SQLite 3.35.0+ supports DROP COLUMN, older versions need table recreation
@@ -445,6 +478,7 @@ class CollectionStore:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_records_updated_at ON records(updated_at)")
 
                 self.conn.commit()
+                table_recreated = True
 
         # Remove from fields table
         cursor.execute("DELETE FROM fields WHERE field_key = ?", (field_key,))
@@ -455,14 +489,34 @@ class CollectionStore:
         # Remove any dependencies referencing this field
         cursor.execute("DELETE FROM deps WHERE source_id = ? OR target_id = ?", (field_key, field_key))
 
-        # Update FTS index if needed (will rebuild without this field)
-        if was_indexed:
+        # Rebuild FTS without this field; a recreated table also lost its triggers and rowids
+        if was_indexed or table_recreated:
             self.update_fts_index()
 
         self.conn.commit()
 
+    def _fts_rowid_column(self) -> str:
+        """Column that keys the FTS index: integer ``id``, or the implicit rowid for prefixed TEXT ids"""
+        cursor = self.conn.cursor()
+        cursor.execute("PRAGMA table_info(records)")
+        for col in cursor.fetchall():
+            if col[1] == "id":
+                return "id" if col[2].upper() == "INTEGER" else "rowid"
+        return "rowid"
+
+    def _drop_fts(self):
+        """Drop the FTS table and the triggers that keep it in sync"""
+        cursor = self.conn.cursor()
+        for trigger in FTS_TRIGGERS:
+            cursor.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        cursor.execute("DROP TABLE IF EXISTS records_fts")
+
     def update_fts_index(self):
-        """Create or update FTS5 search index"""
+        """Rebuild the FTS5 search index from scratch.
+
+        Call after the set of indexed fields changes. Record inserts, updates and
+        deletes keep the index current through triggers, so they don't need this.
+        """
         self.connect()
         cursor = self.conn.cursor()
 
@@ -470,31 +524,66 @@ class CollectionStore:
         cursor.execute("SELECT field_key FROM fields WHERE indexed = 1")
         indexed_fields = [row[0] for row in cursor.fetchall()]
 
+        self._drop_fts()
         if not indexed_fields:
+            self.conn.commit()
             return
 
-        # Drop existing FTS table if it exists
-        cursor.execute("DROP TABLE IF EXISTS records_fts")
+        rowid_col = self._fts_rowid_column()
+        cols = ", ".join(indexed_fields)
+        new_vals = ", ".join(f"new.{f}" for f in indexed_fields)
+        old_vals = ", ".join(f"old.{f}" for f in indexed_fields)
 
-        # Create FTS5 table with indexed fields
-        fts_columns = ", ".join(indexed_fields)
+        # External-content table: text lives in records, the index only stores tokens
         cursor.execute(f"""
             CREATE VIRTUAL TABLE records_fts USING fts5(
-                {fts_columns},
+                {cols},
                 content='records',
-                content_rowid='id'
+                content_rowid='{rowid_col}'
             )
         """)
-
-        # Populate FTS index
-        if indexed_fields:
-            select_cols = ", ".join(indexed_fields)
-            cursor.execute(f"""
-                INSERT INTO records_fts (rowid, {select_cols})
-                SELECT id, {select_cols} FROM records
-            """)
+        cursor.execute(f"""
+            CREATE TRIGGER records_fts_ai AFTER INSERT ON records BEGIN
+                INSERT INTO records_fts (rowid, {cols}) VALUES (new.{rowid_col}, {new_vals});
+            END
+        """)
+        cursor.execute(f"""
+            CREATE TRIGGER records_fts_ad AFTER DELETE ON records BEGIN
+                INSERT INTO records_fts (records_fts, rowid, {cols})
+                VALUES ('delete', old.{rowid_col}, {old_vals});
+            END
+        """)
+        cursor.execute(f"""
+            CREATE TRIGGER records_fts_au AFTER UPDATE ON records BEGIN
+                INSERT INTO records_fts (records_fts, rowid, {cols})
+                VALUES ('delete', old.{rowid_col}, {old_vals});
+                INSERT INTO records_fts (rowid, {cols}) VALUES (new.{rowid_col}, {new_vals});
+            END
+        """)
+        cursor.execute("INSERT INTO records_fts (records_fts) VALUES ('rebuild')")
 
         self.conn.commit()
+
+    def _ensure_fts(self):
+        """Once per connection, migrate databases whose FTS index predates the sync triggers"""
+        if self._fts_checked:
+            return
+        self._fts_checked = True
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT 1 FROM fields WHERE indexed = 1 LIMIT 1")
+        has_indexed = cursor.fetchone() is not None
+        cursor.execute(
+            f"SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ({', '.join('?' for _ in FTS_TRIGGERS)})",
+            FTS_TRIGGERS,
+        )
+        has_triggers = cursor.fetchone()[0] == len(FTS_TRIGGERS)
+        if has_indexed != has_triggers:
+            try:
+                self.update_fts_index()
+            except sqlite3.Error:
+                # Search falls back to a LIKE scan without the index; don't block opening the collection
+                logger.warning("Could not rebuild search index for %s", self.db_path, exc_info=True)
+                self.conn.rollback()
 
     def _ensure_schema(self):
         """Ensure database schema is initialized"""
@@ -513,6 +602,7 @@ class CollectionStore:
             from src.core.asset_store import AssetStore
             AssetStore.ensure_collection_asset_schema(self)
             self._ensure_row_tag_schema()
+            self._ensure_fts()
 
     def list_fields(self) -> list[dict]:
         """List all fields"""
@@ -629,9 +719,6 @@ class CollectionStore:
         if not self.key_prefix:
             record_id = cursor.lastrowid
 
-        # Update FTS index if needed
-        self.update_fts_index()
-
         self.conn.commit()
         return record_id
 
@@ -743,9 +830,6 @@ class CollectionStore:
         sql = f"UPDATE records SET {', '.join(updates)} WHERE id = ?"
         cursor.execute(sql, values)
 
-        # Update FTS index
-        self.update_fts_index()
-
         self.conn.commit()
 
     def delete_record(self, record_id: int | str):
@@ -765,9 +849,6 @@ class CollectionStore:
             pass
         cursor.execute("DELETE FROM record_row_tags WHERE record_id = ?", (str(record_id),))
         cursor.execute("DELETE FROM records WHERE id = ?", (record_id,))
-
-        # Update FTS index
-        self.update_fts_index()
 
         self.conn.commit()
 
@@ -809,6 +890,7 @@ class CollectionStore:
     def search_records(self, query: str, limit: int | None = None,
                        filter_tree: dict | None = None) -> list[dict]:
         """Search records using FTS5 or query parser"""
+        self._ensure_schema()
         self.connect()
         cursor = self.conn.cursor()
 
@@ -867,9 +949,9 @@ class CollectionStore:
 
         # Use FTS5 search - format query for prefix matching
         formatted_query = self._format_fts5_query(query)
-        sql = """
+        sql = f"""
             SELECT r.* FROM records r
-            JOIN records_fts fts ON r.id = fts.rowid
+            JOIN records_fts fts ON r.{self._fts_rowid_column()} = fts.rowid
             WHERE records_fts MATCH ?
         """
         if limit:
