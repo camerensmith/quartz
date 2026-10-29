@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.core.collection_store import ROW_TAG_NAME_KEY, CollectionStore
+from src.core.collection_store import ROW_TAG_NAME_KEY, CollectionStore, copy_database
 from src.core.config import Config
 from src.core.field_keys import sanitize_field_key
 from src.core.resource_path import asset_path, get_quartz_icon_path
@@ -1437,9 +1437,11 @@ class MainWindow(QMainWindow):
             "SQLite Database (*.sqlite);;All Files (*)",
         )
         if file_path:
-            import shutil
-
-            shutil.copy2(db_path, file_path)
+            try:
+                copy_database(db_path, Path(file_path))
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Failed to export database:\n{e}")
+                return
             QMessageBox.information(
                 self, "Success", f"Database exported to {file_path}"
             )
@@ -2609,15 +2611,20 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            with zipfile.ZipFile(file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            import tempfile
+
+            with zipfile.ZipFile(file_path, 'w', zipfile.ZIP_DEFLATED) as zipf, \
+                    tempfile.TemporaryDirectory() as tmp:
                 # Add all collection databases
                 for collection_name in collections:
                     info = self.workspace.get_collection_info(collection_name)
                     if info:
                         db_path = self.workspace.workspace_path / info.db_path
                         if db_path.exists():
-                            # Add database with collection name prefix
-                            zipf.write(db_path, f"{collection_name}/{db_path.name}")
+                            # Add a snapshot of the database with collection name prefix
+                            snapshot = Path(tmp) / f"{collection_name}.sqlite"
+                            copy_database(db_path, snapshot)
+                            zipf.write(snapshot, f"{collection_name}/{db_path.name}")
 
                         # Add collection icon if exists
                         icon_path = self.workspace.get_collection_icon_path(collection_name)

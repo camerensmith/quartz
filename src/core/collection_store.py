@@ -18,6 +18,28 @@ ROW_TAG_NAME_KEY = "__row_tag_name"
 ROW_TAG_COLOR_KEY = "__row_tag_color"
 
 
+def copy_database(src: Path, dest: Path) -> None:
+    """Copy a collection database safely, even while Quartz has it open.
+
+    Collections use WAL mode, so recent changes (even the schema of a new collection)
+    can live in ``<db>-wal`` until SQLite checkpoints them; copying the ``.sqlite`` file
+    alone misses them. SQLite's backup API copies a consistent snapshot that includes
+    them, and replaces an existing *dest* correctly even if it has its own WAL file.
+    """
+    src, dest = Path(src), Path(dest)
+    if not src.is_file():
+        raise FileNotFoundError(src)
+    src_conn = sqlite3.connect(str(src))
+    try:
+        dest_conn = sqlite3.connect(str(dest))
+        try:
+            src_conn.backup(dest_conn)
+        finally:
+            dest_conn.close()
+    finally:
+        src_conn.close()
+
+
 class CollectionStore:
     """Manages a single collection's SQLite database"""
 

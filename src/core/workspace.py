@@ -4,6 +4,7 @@ import logging
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
+from src.core.collection_store import copy_database
 from src.core.json_store import read_json, write_json_atomic
 
 logger = logging.getLogger(__name__)
@@ -344,7 +345,7 @@ class Workspace:
 
             # Backup database
             if db_path.exists():
-                shutil.copy2(db_path, backup_path / f"{name}.sqlite")
+                copy_database(db_path, backup_path / f"{name}.sqlite")
 
             # Backup collection directory
             if collection_dir.exists():
@@ -404,7 +405,7 @@ class Workspace:
         old_db = db_folder / f"{name}.sqlite"
         new_db = db_folder / f"{new_name}.sqlite"
         if old_db.exists():
-            shutil.copy2(old_db, new_db)
+            copy_database(old_db, new_db)
 
         # Duplicate icon if exists
         icons_dir = self.workspace_path / "icons"

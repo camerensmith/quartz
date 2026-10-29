@@ -5,6 +5,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.core.collection_store import copy_database
 from src.core.workspace import CollectionInfo, Workspace
 
 
@@ -97,7 +98,9 @@ def sync_collection(
     target_db_folder.mkdir(parents=True, exist_ok=True)
     target_db = target_db_folder / f"{name}.sqlite"
     if src_db.exists():
-        shutil.copy2(src_db, target_db)
+        # Not a file copy: the source may have changes in its WAL file, and the
+        # target may have a stale WAL file of its own that would be replayed onto it
+        copy_database(src_db, target_db)
 
     # --- Attachments directory ---
     src_attachments = source_workspace.workspace_path / name

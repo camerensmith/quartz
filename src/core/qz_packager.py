@@ -12,11 +12,13 @@ include asset bytes — only references and metadata travel with those formats.
 from __future__ import annotations
 
 import json
+import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
 
 from src.core.asset_store import AssetStore
+from src.core.collection_store import copy_database
 from src.core.version import VERSION
 from src.core.workspace import Workspace
 
@@ -26,6 +28,7 @@ QZ_EXTENSION = ".qz"
 # Top-level workspace entries included in every .qz bundle (relative paths).
 _BUNDLE_ROOT_FILES = ("workspace.json", "subcollections.json")
 _BUNDLE_DIRS = ("db", "icons", "subcollection_icons", "assets")
+_SQLITE_SIDE_FILES = (".sqlite-wal", ".sqlite-shm", ".sqlite-journal")
 
 
 class QzPackager:
@@ -46,7 +49,8 @@ class QzPackager:
         AssetStore.ensure_all_collections(self.workspace_path, db_paths)
 
         manifest = self._build_manifest()
-        with zipfile.ZipFile(target_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(target_path, "w", zipfile.ZIP_DEFLATED) as zf, \
+                tempfile.TemporaryDirectory() as tmp:
             # Manifest first so readers can validate before extracting.
             zf.writestr(
                 "manifest.json",
@@ -62,8 +66,19 @@ class QzPackager:
                 if not src_dir.is_dir():
                     continue
                 for file_path in src_dir.rglob("*"):
-                    if file_path.is_file():
-                        arc = file_path.relative_to(self.workspace_path).as_posix()
+                    if not file_path.is_file():
+                        continue
+                    arc = file_path.relative_to(self.workspace_path).as_posix()
+                    if file_path.suffix == ".sqlite":
+                        # Snapshot the database: recent changes may still be in its WAL file
+                        snapshot = Path(tmp) / arc
+                        snapshot.parent.mkdir(parents=True, exist_ok=True)
+                        copy_database(file_path, snapshot)
+                        zf.write(snapshot, arc)
+                    elif file_path.name.endswith(_SQLITE_SIDE_FILES):
+                        # Live WAL/shared-memory files; their contents are in the snapshot
+                        continue
+                    else:
                         zf.write(file_path, arc)
 
             # Legacy per-collection attachment folders (pre-asset-store).
