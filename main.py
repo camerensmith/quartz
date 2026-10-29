@@ -1,7 +1,9 @@
 """Quartz - Personal Database Desktop Application
 Main entry point"""
 import logging
+import os
 import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
@@ -12,20 +14,30 @@ from src.ui.main_window import MainWindow
 
 
 def setup_logging():
-    """Configure logging to console and file"""
+    """Configure logging to console and a rotating file
+
+    Logs at INFO by default; pass --debug or set QUARTZ_DEBUG=1 for DEBUG.
+    """
     # Create logs directory
     log_dir = Path.home() / ".quartz" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "quartz.log"
 
+    debug = "--debug" in sys.argv or os.environ.get("QUARTZ_DEBUG") == "1"
+
+    # Keep at most ~6 MB of logs: quartz.log plus 5 rotated 1 MB backups
+    handlers: list[logging.Handler] = [
+        RotatingFileHandler(log_file, maxBytes=1_000_000, backupCount=5, encoding='utf-8')
+    ]
+    # The windowed (PyInstaller) build has no stdout
+    if sys.stdout is not None:
+        handlers.append(logging.StreamHandler(sys.stdout))
+
     # Configure root logger
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.DEBUG if debug else logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(sys.stdout),  # Console
-            logging.FileHandler(log_file, mode='a', encoding='utf-8')  # File
-        ]
+        handlers=handlers,
     )
 
     # Set specific loggers to appropriate levels
