@@ -27,8 +27,12 @@ jobs:
         run: ruff check src/ main.py tests/
 
   test:
-    name: Tests
-    runs-on: ubuntu-latest
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     permissions:
       contents: read
     steps:

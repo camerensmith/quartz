@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import subprocess
 import sys
 import tempfile
 import urllib.request
@@ -87,34 +88,96 @@ class UpdateDownloader:
     @staticmethod
     def install_update(downloaded_file: Path, current_exe_path: Path | None = None) -> bool:
         """
-        Install the update by launching the downloaded installer executable.
+        Install the update and restart Quartz on the new version.
 
-        The installer handles replacing the existing installation in-place.
+        Releases are single portable executables, so installing means replacing the
+        running Quartz.exe. A running exe can't be overwritten, so a helper script
+        waits for Quartz to exit, moves the new exe over the old one and starts it.
         The calling code should quit the application shortly after this returns.
 
         Args:
-            downloaded_file: Path to downloaded installer executable
-            current_exe_path: Unused; kept for API compatibility
+            downloaded_file: Path to the downloaded executable
+            current_exe_path: Executable to replace; defaults to the running one when frozen
 
         Returns:
-            True if the installer was launched successfully
+            True if the update was handed off successfully
         """
         if not downloaded_file.exists():
             raise Exception(f"Downloaded file not found: {downloaded_file}")
 
-        if sys.platform == 'win32':
-            return UpdateDownloader._launch_windows_installer(downloaded_file)
-        else:
+        if sys.platform != 'win32':
             raise Exception(f"Auto-update not supported on {sys.platform}")
+
+        if current_exe_path is None and getattr(sys, "frozen", False):
+            current_exe_path = Path(sys.executable)
+        if current_exe_path is None:
+            # Running from source: there's no Quartz.exe to replace
+            return UpdateDownloader._launch_windows_installer(downloaded_file)
+
+        script = downloaded_file.with_suffix(".update.cmd")
+        try:
+            # cmd reads batch files in the console (OEM) code page; the script has its own \r\n
+            script.write_text(
+                UpdateDownloader._replace_script(downloaded_file, current_exe_path),
+                encoding="oem",
+                newline="",
+            )
+        except UnicodeEncodeError:
+            # A path the console code page can't represent: run the new version where it is
+            return UpdateDownloader._launch_windows_installer(downloaded_file)
+        try:
+            subprocess.Popen(
+                ["cmd.exe", "/c", str(script)],
+                creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined]
+                close_fds=True,
+            )
+            return True
+        except OSError:
+            # Couldn't start the helper: run the new version from where it was downloaded
+            return UpdateDownloader._launch_windows_installer(downloaded_file)
+
+    @staticmethod
+    def _replace_script(new_exe: Path, current_exe: Path, attempts: int = 60) -> str:
+        """Batch script that replaces *current_exe* with *new_exe* once Quartz exits, then starts it.
+
+        Retries the move about once a second (Windows refuses while the exe is running).
+        If it never succeeds, e.g. the install folder isn't writable, the new version is
+        started from the download folder instead, so the user still ends up on it.
+        """
+        def quote(path: Path) -> str:
+            # cmd expands %VAR% even inside quotes
+            return '"' + str(path).replace("%", "%%") + '"'
+
+        new, current = quote(new_exe), quote(current_exe)
+        return "\r\n".join([
+            "@echo off",
+            "rem Quartz updater: replace Quartz.exe with the new version once Quartz has exited",
+            "set tries=0",
+            ":move",
+            f"move /Y {new} {current} >NUL 2>&1 && goto relaunch",
+            "set /a tries+=1",
+            f"if %tries% GEQ {attempts} goto fallback",
+            # ping is the usual sleep for scripts without a console (timeout needs one)
+            "ping -n 2 127.0.0.1 >NUL",
+            "goto move",
+            ":relaunch",
+            f'start "" {current}',
+            "goto cleanup",
+            ":fallback",
+            f'start "" {new}',
+            ":cleanup",
+            # Delete this script after it finishes
+            '(goto) 2>NUL & del "%~f0"',
+            "",
+        ])
 
     @staticmethod
     def _launch_windows_installer(installer_exe: Path) -> bool:
-        """Launch the Windows installer executable via the shell so it runs independently."""
+        """Launch the downloaded executable via the shell so it runs independently."""
         try:
             # os.startfile is the Windows-native way to open a file as if double-clicked;
             # the process is fully detached from the current app.
-            os.startfile(str(installer_exe))
+            os.startfile(str(installer_exe))  # type: ignore[attr-defined]
             return True
         except Exception as e:
             raise Exception(f"Failed to launch installer: {e}") from e
-

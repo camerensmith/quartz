@@ -3,7 +3,11 @@
 import hashlib
 import io
 import json
+import subprocess
+import sys
+import time
 import urllib.error
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -100,3 +104,73 @@ def test_check_for_updates_network_error_raises():
     with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("offline")):
         with pytest.raises(RuntimeError, match="Network error"):
             UpdateChecker.check_for_updates()
+
+
+def test_replace_script_contents():
+    script = UpdateDownloader._replace_script(
+        Path(r"C:\Temp\quartz_updates\Quartz-windows-9.9.9.exe"), Path(r"C:\Apps\100%\Quartz.exe"), attempts=5
+    )
+    assert "\r\n" in script and "\n" not in script.replace("\r\n", "")
+    assert r'move /Y "C:\Temp\quartz_updates\Quartz-windows-9.9.9.exe" "C:\Apps\100%%\Quartz.exe"' in script
+    assert r'start "" "C:\Apps\100%%\Quartz.exe"' in script
+    assert "GEQ 5 goto fallback" in script
+
+
+def test_install_update_from_source_just_launches(tmp_path, monkeypatch):
+    new = tmp_path / "Quartz-windows-9.9.9.exe"
+    new.write_bytes(b"exe")
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    with patch.object(UpdateDownloader, "_launch_windows_installer", return_value=True) as launch:
+        assert UpdateDownloader.install_update(new)
+    launch.assert_called_once_with(new)
+
+
+def _run_replace_script(tmp_path, lock_seconds, attempts):
+    """Run the helper script against a locked stand-in for Quartz.exe; return (current, new, marker)."""
+    marker = tmp_path / "marker.txt"
+    # .cmd files stand in for the executables so "starting" them leaves a trace
+    current = tmp_path / "Quartz.cmd"
+    current.write_text(f'@echo off\r\necho old> "{marker}"\r\n', newline="")
+    new = tmp_path / "quartz_updates" / "Quartz-windows-9.9.9.cmd"
+    new.parent.mkdir()
+    new.write_text(f'@echo off\r\necho new> "{marker}"\r\n', newline="")
+
+    # A running exe can't be replaced; an open file handle has the same effect
+    locker = subprocess.Popen(
+        [sys.executable, "-c", f"import time; f = open({str(current)!r}); print('locked', flush=True); time.sleep({lock_seconds})"],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert locker.stdout.readline().strip() == "locked"
+
+    script = tmp_path / "update.cmd"
+    script.write_text(UpdateDownloader._replace_script(new, current, attempts=attempts), encoding="oem", newline="")
+    started = time.monotonic()
+    subprocess.run(["cmd.exe", "/c", str(script)], check=True, timeout=120)
+    elapsed = time.monotonic() - started
+    locker.wait()
+
+    # The relaunch runs in its own window; give it a moment to write the marker
+    deadline = time.monotonic() + 30
+    while not marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.2)
+    return current, new, marker, elapsed
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="runs the Windows helper script")
+def test_replace_script_waits_for_exit_then_swaps_and_relaunches(tmp_path):
+    current, new, marker, elapsed = _run_replace_script(tmp_path, lock_seconds=3, attempts=30)
+    assert elapsed >= 1  # it waited for the lock instead of failing
+    assert "echo new" in current.read_text()
+    assert not new.exists()
+    assert marker.read_text().strip() == "new"
+    assert not (tmp_path / "update.cmd").exists()  # deletes itself
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="runs the Windows helper script")
+def test_replace_script_falls_back_to_downloaded_copy(tmp_path):
+    current, new, marker, _ = _run_replace_script(tmp_path, lock_seconds=8, attempts=2)
+    assert "echo old" in current.read_text()
+    assert new.exists()
+    assert marker.read_text().strip() == "new"  # still ends up on the new version

@@ -101,7 +101,7 @@ class UpdateProgressDialog(QDialog):
     def _on_download_finished(self, downloaded_file: Path):
         """Handle download completion"""
         self.downloaded_file = downloaded_file
-        self.status_label.setText("Download complete! Launching installer...")
+        self.status_label.setText("Download complete! Installing...")
         self.progress_bar.setValue(100)
         self.cancel_btn.setEnabled(False)
 
@@ -112,8 +112,7 @@ class UpdateProgressDialog(QDialog):
             UpdateDownloader.install_update(downloaded_file)
 
             self.status_label.setText(
-                "Installer launched. Quartz will now close.\n"
-                "Please follow the installer instructions to complete the update."
+                "Quartz will now close and restart on the new version."
             )
 
             def _close_and_quit():
