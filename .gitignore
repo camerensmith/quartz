@@ -64,3 +64,6 @@ quartz_config.json
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Node (icon package source; nothing in the app loads it)
+node_modules/
