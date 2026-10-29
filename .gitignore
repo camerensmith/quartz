@@ -50,10 +50,10 @@ quartz_config.json
 !quartz.png
 
 # Ignore text, CSV, and markdown files in root (except README.md)
-*.txt
-*.csv
-*.md
-!README.md
+/*.txt
+/*.csv
+/*.md
+!/README.md
 
 # Ignore PowerShell and batch scripts
 *.ps1

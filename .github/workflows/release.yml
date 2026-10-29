@@ -57,6 +57,27 @@ jobs:
           Write-Output "RELEASE_VERSION=$version"   >> $env:GITHUB_ENV
           Write-Output "EXE_PATH=$dest"             >> $env:GITHUB_ENV
 
+      - name: Check tag matches project version
+        shell: pwsh
+        run: |
+          # The app compares its own version against the latest release, so they must agree
+          $projectVersion = python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+          if ($projectVersion -ne $env:RELEASE_VERSION) {
+            Write-Error "Tag version $env:RELEASE_VERSION does not match pyproject.toml version $projectVersion"
+            exit 1
+          }
+
+      - name: Prepare release notes
+        shell: pwsh
+        run: |
+          # Hand-written notes for this version, if any, go above GitHub's generated PR list
+          $notes = ".github/release-notes/$env:RELEASE_VERSION.md"
+          if (Test-Path $notes) {
+            Copy-Item $notes release-body.md
+          } else {
+            New-Item release-body.md -ItemType File | Out-Null
+          }
+
       - name: Upload executable artifact
         uses: actions/upload-artifact@v4
         with:
@@ -72,4 +93,5 @@ jobs:
           draft: false
           prerelease: false
           files: ${{ env.EXE_PATH }}
+          body_path: release-body.md
           generate_release_notes: true
