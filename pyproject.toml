@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
-    {name = "Quartz Contributors"}
+    {name = "camerensmith"}
 ]
 keywords = ["database", "desktop", "personal", "data-management"]
 classifiers = [
@@ -44,9 +44,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/quartz"
-Repository = "https://github.com/yourusername/quartz"
-Issues = "https://github.com/yourusername/quartz/issues"
+Homepage = "https://github.com/camerensmith/quartz"
+Repository = "https://github.com/camerensmith/quartz"
+Issues = "https://github.com/camerensmith/quartz/issues"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]

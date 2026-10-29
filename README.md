@@ -16,7 +16,7 @@ A cross-platform desktop application for managing personal databases, inspired b
 ## Requirements
 
 - **Python 3.11+** (required for modern typing and performance)
-- See `requirements.txt` for full dependency list
+- Dependencies are listed in `pyproject.toml`
 
 
 ## How to Use
@@ -48,7 +48,7 @@ venv\Scripts\activate.bat
 2. **Install dependencies**:
 
 ```bash
-pip install -r requirements.txt
+pip install .
 ```
 
 3. **Run the application**:
@@ -59,17 +59,20 @@ python main.py
 
 ### Development Installation
 
-For development with testing and linting tools:
-
-```bash
-pip install -r requirements-dev.txt
-```
-
-Or using the project in editable mode:
+For development with testing and linting tools, install the project in editable mode:
 
 ```bash
 pip install -e ".[dev]"
 ```
+
+Run the checks CI runs:
+
+```bash
+ruff check src/ main.py tests/
+pytest
+```
+
+Run with `--debug` (or set `QUARTZ_DEBUG=1`) for debug-level logs in `~/.quartz/logs/quartz.log`.
 
 ## Dependencies
 
@@ -79,7 +82,7 @@ pip install -e ".[dev]"
 - **lark**: Search query parsing (field queries, boolean logic)
 
 ### Data Handling
-- **pandas**: CSV import/export and bulk data operations
+- **openpyxl**: Excel import/export
 - **python-dateutil**: Date parsing and normalization
 - **Pillow**: Image thumbnails and previews
 
@@ -101,17 +104,24 @@ pip install -e ".[dev]"
 
 ```
 Quartz/
-├── main.py              # Application entry point
+├── main.py                  # Application entry point
+├── pyproject.toml           # Version, dependencies, tool config
+├── quartz.spec              # PyInstaller build
+├── assets/                  # Toolbar and menu icons
 ├── src/
-│   ├── core/            # Core business logic
-│   │   ├── config.py     # Configuration management
-│   │   ├── workspace.py # Workspace and collection registry
-│   │   └── collection_store.py # Database operations
-│   └── ui/               # UI components
-│       ├── main_window.py # Main application window
-│       ├── table_view.py  # Table/spreadsheet view
-│       └── form_view.py   # Form data entry view
-└── requirements.txt      # Python dependencies
+│   ├── core/                # Business logic (no UI)
+│   │   ├── collection_store.py  # Collection database, fields, search index
+│   │   ├── field_keys.py        # Field key sanitization and validation
+│   │   ├── workspace.py         # Workspace and collection registry
+│   │   ├── query_parser.py      # Search query parsing
+│   │   ├── export_service.py    # CSV / JSON / Excel export
+│   │   ├── update_checker.py    # GitHub release checks
+│   │   └── update_downloader.py # Checksum-verified update downloads
+│   └── ui/                  # PySide6 windows and dialogs
+│       ├── main_window.py
+│       ├── table_view.py
+│       └── form_view.py
+└── tests/                   # pytest suite
 ```
 
 ## Usage
@@ -124,8 +134,8 @@ Quartz/
 
 ## Development Status
 
-This is an active development project. Current milestone: **Milestone 0 - Skeleton**
+This is an active development project; see [Releases](https://github.com/camerensmith/quartz/releases) for the latest version.
 
 ## License
 
-[To be determined]
+MIT, see [LICENSE](LICENSE).
