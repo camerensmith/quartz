@@ -14,9 +14,10 @@ class UpdateDownloadThread(QThread):
     finished = Signal(Path)  # path to downloaded file
     error = Signal(str)  # error message
 
-    def __init__(self, download_url: str):
+    def __init__(self, download_url: str, expected_sha256: str | None):
         super().__init__()
         self.download_url = download_url
+        self.expected_sha256 = expected_sha256
 
     def run(self):
         """Download the update"""
@@ -26,7 +27,8 @@ class UpdateDownloadThread(QThread):
 
             downloaded_file = UpdateDownloader.download_update(
                 self.download_url,
-                progress_callback
+                progress_callback,
+                self.expected_sha256,
             )
             self.finished.emit(downloaded_file)
         except Exception as e:
@@ -36,9 +38,10 @@ class UpdateDownloadThread(QThread):
 class UpdateProgressDialog(QDialog):
     """Dialog showing download and installation progress"""
 
-    def __init__(self, download_url: str, parent=None):
+    def __init__(self, download_url: str, expected_sha256: str | None, parent=None):
         super().__init__(parent)
         self.download_url = download_url
+        self.expected_sha256 = expected_sha256
         self.downloaded_file: Path | None = None
         self._init_ui()
         self._start_download()
@@ -76,7 +79,7 @@ class UpdateProgressDialog(QDialog):
     def _start_download(self):
         """Start downloading the update"""
         self.status_label.setText("Downloading update...")
-        self.thread = UpdateDownloadThread(self.download_url)
+        self.thread = UpdateDownloadThread(self.download_url, self.expected_sha256)
         self.thread.progress.connect(self._on_progress)
         self.thread.finished.connect(self._on_download_finished)
         self.thread.error.connect(self._on_error)
