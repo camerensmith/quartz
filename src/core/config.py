@@ -1,8 +1,9 @@
 """Application configuration management"""
 
-import json
 from pathlib import Path
 from typing import Any
+
+from src.core.json_store import read_json, write_json_atomic
 
 
 class Config:
@@ -17,17 +18,15 @@ class Config:
             config_path = config_dir / "quartz_config.json"
 
         self.config_path = config_path
+        # Set when the settings file couldn't be read; it was moved here instead of being overwritten
+        self.load_backup: Path | None = None
         self.data: dict[str, Any] = self.load()
 
     def load(self) -> dict[str, Any]:
         """Load configuration from file"""
-        if self.config_path.exists():
-            try:
-                with open(self.config_path, encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception:
-                pass
-
+        data, self.load_backup = read_json(self.config_path)
+        if data is not None:
+            return data
         return self.default_config()
 
     def default_config(self) -> dict[str, Any]:
@@ -62,8 +61,7 @@ class Config:
     def save(self):
         """Save configuration to file"""
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.config_path, 'w', encoding='utf-8') as f:
-            json.dump(self.data, f, indent=2)
+        write_json_atomic(self.config_path, self.data)
 
     def get(self, key: str, default=None):
         """Get a configuration value"""

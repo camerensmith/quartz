@@ -152,6 +152,42 @@ class MainWindow(QMainWindow):
             # Delay check slightly to let UI finish loading
             QTimer.singleShot(2000, self._check_for_updates_async)
 
+        # Tell the user about any data file that couldn't be read, once the window is up
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._warn_about_unreadable_files)
+
+    def _warn_about_unreadable_files(self):
+        """Explain where unreadable workspace/settings files were moved, if any"""
+        backups = [
+            (what, path) for what, path in (
+                ("Collection list", self.workspace.registry_backup),
+                ("Subcollections", self.subcollection_store.load_backup),
+                ("Settings", self.config.load_backup),
+            ) if path
+        ]
+        if not backups:
+            return
+        details = "\n".join(f"• {what}: {path}" for what, path in backups)
+        recovered = self.workspace.recovered_collections
+        found = (
+            "the collection database it found, which wasn't affected"
+            if len(recovered) == 1 else
+            f"the {len(recovered)} collection databases it found, which weren't affected"
+        )
+        recovery = (
+            f"Quartz rebuilt the collection list from {found}. "
+            "Collection descriptions and custom order may need to be set again."
+            if recovered else
+            "Your collection databases weren't affected."
+        )
+        QMessageBox.warning(
+            self,
+            "Some Quartz files couldn't be read",
+            "These files were damaged or unreadable, so Quartz started without them. "
+            "The originals were kept here, unchanged:\n\n"
+            f"{details}\n\n{recovery}",
+        )
+
     def _apply_theme(self):
         """Apply theme stylesheet"""
         # Support new theme system with color_scheme and mode

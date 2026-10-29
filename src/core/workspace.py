@@ -1,8 +1,12 @@
 """Workspace and collection registry management"""
 
-import json
-from dataclasses import asdict, dataclass
+import logging
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
+
+from src.core.json_store import read_json, write_json_atomic
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -32,7 +36,9 @@ class CollectionInfo:
             data['order'] = None
         if 'key_prefix' not in data:
             data['key_prefix'] = None
-        return cls(**data)
+        # Ignore keys written by newer versions; save_registry keeps them in the file
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 
 class Workspace:
@@ -43,24 +49,87 @@ class Workspace:
         self.workspace_path.mkdir(parents=True, exist_ok=True)
         self.registry_path = self.workspace_path / "workspace.json"
         self.collections: dict[str, CollectionInfo] = {}
+        # Registry entries as read, so saving keeps keys and entries this version doesn't understand
+        self._raw_collections: dict[str, dict] = {}
+        self._raw_extra: dict = {}
+        self._unreadable: set[str] = set()
+        # Set when workspace.json couldn't be read; it was moved here instead of being overwritten
+        self.registry_backup: Path | None = None
+        # Collections re-registered from db/ after an unreadable workspace.json
+        self.recovered_collections: list[str] = []
         self.load_registry()
 
     def load_registry(self):
         """Load collection registry"""
-        if self.registry_path.exists():
+        self.collections = {}
+        self._raw_collections = {}
+        self._raw_extra = {}
+        self._unreadable = set()
+        self.recovered_collections = []
+        data, self.registry_backup = read_json(self.registry_path)
+        if data is None:
+            if self.registry_backup:
+                # The databases are intact; rebuild the list from them so the collections reappear
+                self.recovered_collections = self._recover_from_databases()
+                if self.recovered_collections:
+                    self.save_registry()
+            return
+
+        self._raw_extra = {k: v for k, v in data.items() if k != "collections"}
+        raw = data.get("collections", {})
+        if not isinstance(raw, dict):
+            logger.error("Ignoring malformed 'collections' in %s", self.registry_path)
+            raw = {}
+        self._raw_collections = raw
+        for name, info in raw.items():
             try:
-                with open(self.registry_path, encoding='utf-8') as f:
-                    data = json.load(f)
-                self.collections = {
-                    name: CollectionInfo.from_dict(info)
-                    for name, info in data.get("collections", {}).items()
-                }
-                # Migrate old database structure to new db/ folder
-                self._migrate_database_structure()
-            except Exception:
-                self.collections = {}
-        else:
-            self.collections = {}
+                self.collections[name] = CollectionInfo.from_dict(dict(info))
+            except (TypeError, ValueError):
+                # Keep it in the file; just don't show it
+                self._unreadable.add(name)
+                logger.error("Skipping unreadable registry entry %r in %s", name, self.registry_path)
+
+        # Migrate old database structure to new db/ folder
+        try:
+            self._migrate_database_structure()
+        except OSError:
+            logger.exception("Could not migrate collection databases in %s", self.workspace_path)
+
+    def _recover_from_databases(self) -> list[str]:
+        """Register every db/*.sqlite file; descriptions and custom order aren't recoverable"""
+        import sqlite3
+        from datetime import datetime
+
+        recovered = []
+        for order, db_path in enumerate(sorted((self.workspace_path / "db").glob("*.sqlite"))):
+            name = db_path.stem
+            try:
+                conn = sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True)
+                try:
+                    row = conn.execute("SELECT prefix FROM id_sequence LIMIT 1").fetchone()
+                    key_prefix = row[0] if row else None
+                except sqlite3.OperationalError:
+                    key_prefix = None  # No id_sequence table: integer record IDs
+                finally:
+                    conn.close()
+            except sqlite3.Error:
+                logger.exception("Could not open %s while recovering the collection list", db_path)
+                continue
+            modified = datetime.fromtimestamp(db_path.stat().st_mtime).isoformat()
+            icon = self.workspace_path / "icons" / f"{name}.png"
+            self.collections[name] = CollectionInfo(
+                name=name,
+                db_path=f"db/{name}.sqlite",
+                created_at=modified,
+                updated_at=modified,
+                icon_path=f"icons/{name}.png" if icon.exists() else None,
+                order=order,
+                key_prefix=key_prefix,
+            )
+            recovered.append(name)
+        if recovered:
+            logger.warning("Recovered %d collections from %s", len(recovered), self.workspace_path / "db")
+        return recovered
 
     def _migrate_database_structure(self):
         """Migrate collections from old structure (collection_name/collection.sqlite) to new (db/collection_name.sqlite)"""
@@ -78,8 +147,12 @@ class Workspace:
                 # Migrate to new structure
                 new_db_path = db_folder / f"{name}.sqlite"
                 if not new_db_path.exists():
-                    # Move database
-                    shutil.move(str(old_db_path), str(new_db_path))
+                    # Move database; on failure leave this one where it is and still record the others
+                    try:
+                        shutil.move(str(old_db_path), str(new_db_path))
+                    except OSError:
+                        logger.exception("Could not move %s to %s", old_db_path, new_db_path)
+                        continue
                     migrated = True
                     # Update registry
                     info.db_path = f"db/{name}.sqlite"
@@ -96,14 +169,20 @@ class Workspace:
 
     def save_registry(self):
         """Save collection registry"""
-        data = {
-            "collections": {
-                name: info.to_dict()
-                for name, info in self.collections.items()
-            }
+        def raw(name: str) -> dict:
+            entry = self._raw_collections.get(name)
+            return entry if isinstance(entry, dict) else {}
+
+        collections = {
+            name: {**raw(name), **info.to_dict()}
+            for name, info in self.collections.items()
         }
-        with open(self.registry_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
+        # Entries this version couldn't read stay as they were
+        for name in self._unreadable - collections.keys():
+            collections[name] = self._raw_collections[name]
+        data = {**self._raw_extra, "collections": collections}
+        write_json_atomic(self.registry_path, data)
+        self._raw_collections = collections
 
     def list_collections(self) -> list[str]:
         """List all collection names in order"""
@@ -231,6 +310,7 @@ class Workspace:
 
         # Update registry
         info = self.collections.pop(old_name)
+        self._raw_collections[new_name] = self._raw_collections.pop(old_name, {})
         info.name = new_name
         # Update db_path
         info.db_path = f"db/{new_name}.sqlite"

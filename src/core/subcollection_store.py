@@ -1,9 +1,10 @@
 """Subcollection data layer — stored as JSON alongside the workspace registry"""
 
-import json
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+from src.core.json_store import read_json, write_json_atomic
 
 
 @dataclass
@@ -48,6 +49,8 @@ class SubcollectionStore:
         self.workspace_path = Path(workspace_path)
         self.store_path = self.workspace_path / "subcollections.json"
         self._data: dict[str, list[dict]] = {}
+        # Set when the file couldn't be read; it was moved here instead of being overwritten
+        self.load_backup: Path | None = None
         self._load()
 
     # ------------------------------------------------------------------
@@ -55,18 +58,11 @@ class SubcollectionStore:
     # ------------------------------------------------------------------
 
     def _load(self):
-        if self.store_path.exists():
-            try:
-                with open(self.store_path, encoding="utf-8") as fh:
-                    self._data = json.load(fh)
-            except Exception:
-                self._data = {}
-        else:
-            self._data = {}
+        data, self.load_backup = read_json(self.store_path)
+        self._data = data if data is not None else {}
 
     def _save(self):
-        with open(self.store_path, "w", encoding="utf-8") as fh:
-            json.dump(self._data, fh, indent=2)
+        write_json_atomic(self.store_path, self._data)
 
     def _get_list(self, collection_name: str) -> list[dict]:
         return self._data.get(collection_name, [])
